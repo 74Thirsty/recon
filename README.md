@@ -20,6 +20,8 @@ artifact-rich reports for later analysis.
 - **Packet capture & monitoring** – Browse available interfaces, set capture filters, and
   write `.pcap` files with a single keystroke to stop recording.
 - **Utility toolbox** – Validate IPs/domains, resolve hosts, and perform reverse lookups.
+- **OSINT automation** – Launch PhoneInfoga, SpiderFoot, StormBreaker, Holehe, and
+  Osintgram directly from the toolkit with automatic report export.
 - **Dependency concierge** – Check required/optional tooling status and trigger guided
   installation attempts from inside the app.
 
@@ -38,6 +40,9 @@ findings or hand them off to teammates.
   - `dig`/`nslookup` – detailed DNS queries
   - `whatweb` – web technology fingerprinting
   - `subfinder` – high-fidelity subdomain enumeration
+  - `phoneinfoga`, `spiderfoot`, `stormbreaker`, `holehe`, `osintgram` – advanced OSINT
+    tooling surfaced in the dedicated automation menu (manual installation guidance shown
+    in-app when missing)
 
 If automatic installation is not possible, the app shows the exact package names to
 install for `apt`, `yum/dnf`, `pacman`, `apk`, or `brew`.
@@ -90,6 +95,8 @@ Feel free to add `reports/` to your ignore list if you keep the repo clean (a st
   services.
 - When subfinder is unavailable, the app gracefully falls back to crt.sh so you never
   lose visibility into certificate-derived subdomains.
+- Explore the **OSINT automation suite** to fan out to PhoneInfoga, SpiderFoot,
+  StormBreaker, Holehe, and Osintgram while keeping all transcripts under `reports/`.
 
 ## Contributing
 

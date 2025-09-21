@@ -35,6 +35,8 @@ class ToolMetadata:
     friendly_name: str
     packages: Dict[str, str]
     optional: bool = False
+    executables: Optional[List[str]] = None
+    install_hint: Optional[str] = None
 
 
 class DependencyManager:
@@ -60,10 +62,79 @@ class DependencyManager:
             "subfinder": ToolMetadata(
                 "Subfinder", {"apt": "subfinder", "yum": "subfinder", "brew": "subfinder"}, optional=True
             ),
+            "phoneinfoga": ToolMetadata(
+                friendly_name="PhoneInfoga",
+                packages={},
+                optional=True,
+                executables=["phoneinfoga"],
+                install_hint=(
+                    "Install via pip (pip3 install phoneinfoga) or follow the instructions "
+                    "at https://github.com/sundowndev/PhoneInfoga."
+                ),
+            ),
+            "spiderfoot": ToolMetadata(
+                friendly_name="SpiderFoot",
+                packages={},
+                optional=True,
+                executables=["sfcli", "spiderfoot", "sfcli.py"],
+                install_hint=(
+                    "SpiderFoot does not have a native package in most distributions. Clone the "
+                    "project from https://github.com/smicallef/spiderfoot and expose sfcli.py on "
+                    "your PATH."
+                ),
+            ),
+            "stormbreaker": ToolMetadata(
+                friendly_name="StormBreaker",
+                packages={},
+                optional=True,
+                executables=["stormbreaker", "storm-breaker", "stormbreaker.py"],
+                install_hint=(
+                    "StormBreaker typically runs from its Git repository. Clone "
+                    "https://github.com/ultrasecurity/Storm-Breaker and expose the launcher "
+                    "script or provide its path manually."
+                ),
+            ),
+            "holehe": ToolMetadata(
+                friendly_name="Holehe",
+                packages={},
+                optional=True,
+                executables=["holehe"],
+                install_hint=(
+                    "Install via pip (pip3 install holehe) or consult "
+                    "https://github.com/megadose/holehe for manual setup steps."
+                ),
+            ),
+            "osintgram": ToolMetadata(
+                friendly_name="Osintgram",
+                packages={},
+                optional=True,
+                executables=["osintgram"],
+                install_hint=(
+                    "Osintgram is normally executed from its repository. Clone "
+                    "https://github.com/Datalux/Osintgram and run main.py with python3, or create "
+                    "an 'osintgram' wrapper in your PATH."
+                ),
+            ),
         }
 
     def tool_available(self, tool: str) -> bool:
+        if tool in self.tools:
+            return self.command_prefix(tool) is not None
         return shutil.which(tool) is not None
+
+    def command_prefix(self, tool: str) -> Optional[List[str]]:
+        metadata = self.tools.get(tool)
+        candidates = metadata.executables if metadata and metadata.executables else [tool]
+        for candidate in candidates:
+            path = shutil.which(candidate)
+            if not path:
+                continue
+            if path.endswith(".py"):
+                python = sys.executable or shutil.which("python3") or shutil.which("python")
+                if python:
+                    return [python, path]
+            return [path]
+        return None
 
     def ensure_tool(self, tool: str, *, interactive: bool = True) -> bool:
         metadata = self.tools.get(tool)
@@ -78,7 +149,16 @@ class DependencyManager:
             message += " This feature is optional but recommended."
         print(message)
 
+        if not metadata.packages:
+            if metadata.install_hint:
+                print(metadata.install_hint)
+            else:
+                print("Automatic installation is not configured for this tool. Please install it manually.")
+            return False
+
         if not interactive:
+            if metadata.install_hint:
+                print(metadata.install_hint)
             return False
 
         response = input("Attempt automatic installation? [y/N]: ").strip().lower()
@@ -88,6 +168,8 @@ class DependencyManager:
 
         if not self._attempt_install(tool, metadata.packages):
             print("[ERROR] Unable to install automatically. Please install manually.")
+            if metadata.install_hint:
+                print(metadata.install_hint)
             return False
 
         if self.tool_available(tool):
@@ -95,6 +177,8 @@ class DependencyManager:
             return True
 
         print(f"[WARNING] {metadata.friendly_name} still not detected after installation attempt.")
+        if metadata.install_hint:
+            print(metadata.install_hint)
         return False
 
     def _attempt_install(self, tool: str, packages: Dict[str, str]) -> bool:
@@ -201,8 +285,9 @@ class ReconApp:
                 "3": self.dns_menu,
                 "4": self.web_menu,
                 "5": self.packet_capture_menu,
-                "6": self.utility_menu,
-                "7": self.dependencies_menu,
+                "6": self.osint_menu,
+                "7": self.utility_menu,
+                "8": self.dependencies_menu,
                 "0": self.exit_app,
             }
             handler = handlers.get(choice)
@@ -225,8 +310,9 @@ class ReconApp:
         print("3) DNS + subdomain intelligence")
         print("4) Web footprinting toolkit")
         print("5) Packet capture & monitoring")
-        print("6) Utility toolbox")
-        print("7) Dependency health & installation")
+        print("6) OSINT automation & social recon")
+        print("7) Utility toolbox")
+        print("8) Dependency health & installation")
         print("0) Exit")
         print("==============================")
 
@@ -409,6 +495,229 @@ class ReconApp:
             print(line.rstrip())
 
     # ------------------------------------------------------------------
+    # OSINT automation & specialty tooling
+    # ------------------------------------------------------------------
+    def osint_menu(self) -> None:
+        while True:
+            print("\nOSINT Automation Suite")
+            print("----------------------")
+            print("1) PhoneInfoga phone intelligence")
+            print("2) SpiderFoot multi-source reconnaissance")
+            print("3) StormBreaker payload/orchestration")
+            print("4) Holehe email enumeration")
+            print("5) Osintgram Instagram intelligence")
+            print("0) Back to main menu")
+            choice = input("Choose an option: ").strip()
+            if choice == "1":
+                self.phoneinfoga_lookup()
+            elif choice == "2":
+                self.spiderfoot_scan()
+            elif choice == "3":
+                self.stormbreaker_workflow()
+            elif choice == "4":
+                self.holehe_lookup()
+            elif choice == "5":
+                self.osintgram_lookup()
+            elif choice == "0":
+                print()
+                return
+            else:
+                print("[!] Invalid selection.\n")
+
+    def phoneinfoga_lookup(self) -> None:
+        base_cmd = self._get_tool_command("phoneinfoga")
+        if not base_cmd:
+            return
+        number = input("Phone number (E.164 format, e.g. +15551234567): ").strip()
+        if not number:
+            print("[!] No phone number provided.\n")
+            return
+        fmt = input("Output format [json/pretty/yaml/csv] (default json): ").strip().lower()
+        if not fmt:
+            fmt = "json"
+        allowed_formats = {"json", "pretty", "yaml", "csv"}
+        if fmt not in allowed_formats:
+            print("[!] Unknown format supplied. Falling back to json.\n")
+            fmt = "json"
+        extra_args = input("Additional PhoneInfoga flags (optional): ").strip()
+        cmd = list(base_cmd) + ["scan", "-n", number, "-f", fmt]
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("phoneinfoga", number)
+        if not output.strip():
+            output = "[!] PhoneInfoga returned no data."
+        report_path.write_text(output)
+        print(f"[+] PhoneInfoga results saved to {report_path}\n")
+
+    def spiderfoot_scan(self) -> None:
+        base_cmd = self._get_tool_command("spiderfoot")
+        if not base_cmd:
+            return
+        target = input("Target for SpiderFoot: ").strip()
+        if not target:
+            print("[!] No target provided.\n")
+            return
+        target_type = input(
+            "Target type [domain/ip/email/asn/phone/netblock/username/name] (leave blank for auto): "
+        ).strip().lower()
+        modules = input("Comma-separated module IDs (leave blank for defaults): ").strip()
+        output_format = input("Output format [csv/json/tsv/sqlite] (default csv): ").strip().lower()
+        extra_args = input("Additional SpiderFoot flags (optional): ").strip()
+
+        cmd = list(base_cmd)
+        cmd += ["-s", target]
+        allowed_types = {"domain", "ip", "email", "asn", "phone", "netblock", "username", "name"}
+        if target_type:
+            if target_type in allowed_types:
+                cmd += ["-t", target_type]
+            else:
+                print("[!] Unrecognized target type supplied. Add it manually via extra flags if required.")
+        if modules:
+            cmd += ["-m", modules]
+        if not output_format:
+            output_format = "csv"
+        output_flag_tokens = []
+        if extra_args:
+            try:
+                output_flag_tokens = shlex.split(extra_args)
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        has_output_flag = any(
+            token in {"-o", "--output"} or token.startswith("--output=") for token in output_flag_tokens
+        )
+        if not has_output_flag and output_format:
+            cmd += ["-o", output_format]
+        cmd.extend(output_flag_tokens)
+
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        label = output_format or "stdout"
+        report_path = self._create_report_path(f"spiderfoot_{label}", target)
+        if not output.strip():
+            output = (
+                "[!] SpiderFoot produced no stdout output. Check the specified modules/flags or the tool's logs."
+            )
+        report_path.write_text(output)
+        print(f"[+] SpiderFoot output saved to {report_path}\n")
+
+    def stormbreaker_workflow(self) -> None:
+        base_cmd = self._get_tool_command("stormbreaker")
+        if not base_cmd:
+            return
+        descriptor = input("Short label for this StormBreaker run (optional): ").strip() or "stormbreaker"
+        extra_args = input(
+            "StormBreaker arguments (blank for interactive mode; output will not be captured in interactive mode): "
+        ).strip()
+        if not extra_args:
+            print("[INFO] Launching StormBreaker interactively. Press Ctrl+C to return when finished.\n")
+            try:
+                subprocess.run(base_cmd, check=False)
+            except FileNotFoundError:
+                print("[ERROR] StormBreaker command not found.\n")
+            except Exception as exc:
+                print(f"[ERROR] StormBreaker execution failed: {exc}\n")
+            return
+        try:
+            cmd = list(base_cmd) + shlex.split(extra_args)
+        except ValueError as exc:
+            print(f"[!] Unable to parse arguments: {exc}\n")
+            return
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        if not output.strip():
+            output = (
+                "[!] StormBreaker completed without stdout output. Review any payloads or logs generated by the tool."
+            )
+        report_path = self._create_report_path("stormbreaker", descriptor)
+        report_path.write_text(output)
+        print(f"[+] StormBreaker transcript saved to {report_path}\n")
+
+    def holehe_lookup(self) -> None:
+        base_cmd = self._get_tool_command("holehe")
+        if not base_cmd:
+            return
+        email_input = input("Email address(es) (comma or space separated): ").strip()
+        if not email_input:
+            print("[!] No email addresses provided.\n")
+            return
+        emails = [item for item in re.split(r"[\s,]+", email_input) if item]
+        if not emails:
+            print("[!] No valid email addresses detected.\n")
+            return
+        extra_args = input("Additional Holehe flags (applied to all targets, optional): ").strip()
+        try:
+            extra_tokens = shlex.split(extra_args) if extra_args else []
+        except ValueError as exc:
+            print(f"[!] Unable to parse extra arguments: {exc}\n")
+            return
+        chunks: List[str] = []
+        for email in emails:
+            header = f"===== {email} ====="
+            print(f"\n{header}")
+            cmd = list(base_cmd) + extra_tokens + [email]
+            output = self._run_command_capture(cmd)
+            if output is None:
+                chunks.append(f"{header}\n[!] Holehe execution failed for this address.")
+                continue
+            if not output.strip():
+                chunks.append(f"{header}\n[!] No output returned. Consult Holehe logs.")
+            else:
+                chunks.append(f"{header}\n{output.rstrip()}")
+        if not chunks:
+            print("[!] No results to record.\n")
+            return
+        report_path = self._create_report_path("holehe", emails[0])
+        report_text = "\n\n".join(chunks) + "\n"
+        report_path.write_text(report_text)
+        print(f"\n[+] Holehe summary saved to {report_path}\n")
+
+    def osintgram_lookup(self) -> None:
+        base_cmd = self._get_tool_command("osintgram")
+        if not base_cmd:
+            return
+        username = input("Instagram username/target: ").strip()
+        if not username:
+            print("[!] No username provided.\n")
+            return
+        command = input(
+            "Osintgram command/module (e.g. info, followers). Leave blank for interactive shell: "
+        ).strip()
+        extra_args = input("Additional Osintgram flags (optional): ").strip()
+        if not command:
+            print("[INFO] Launching Osintgram interactive shell. Use 'exit' within the tool to return.\n")
+            try:
+                subprocess.run(list(base_cmd) + [username], check=False)
+            except FileNotFoundError:
+                print("[ERROR] Osintgram command not found.\n")
+            except Exception as exc:
+                print(f"[ERROR] Osintgram execution failed: {exc}\n")
+            return
+        try:
+            extra_tokens = shlex.split(extra_args) if extra_args else []
+        except ValueError as exc:
+            print(f"[!] Unable to parse extra arguments: {exc}\n")
+            return
+        cmd = list(base_cmd) + [username, command] + extra_tokens
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        if not output.strip():
+            output = "[!] Osintgram returned no output. Verify authentication and module support."
+        report_path = self._create_report_path(f"osintgram_{command}", username)
+        report_path.write_text(output)
+        print(f"[+] Osintgram output saved to {report_path}\n")
+
+    # ------------------------------------------------------------------
     # Utility toolbox
     # ------------------------------------------------------------------
     def utility_menu(self) -> None:
@@ -460,6 +769,56 @@ class ReconApp:
     # ------------------------------------------------------------------
     # Helper functions
     # ------------------------------------------------------------------
+    def _get_tool_command(self, tool: str) -> Optional[List[str]]:
+        base_cmd = self.dependency_manager.command_prefix(tool)
+        if base_cmd:
+            return base_cmd
+        metadata = self.dependency_manager.tools.get(tool)
+        friendly = metadata.friendly_name if metadata else tool
+        self.dependency_manager.ensure_tool(tool, interactive=False)
+        manual = input(
+            f"Provide the full command to execute {friendly} (blank to cancel): "
+        ).strip()
+        if not manual:
+            print("[!] Command entry cancelled.\n")
+            return None
+        try:
+            return shlex.split(manual)
+        except ValueError as exc:
+            print(f"[ERROR] Unable to parse command: {exc}\n")
+            return None
+
+    def _format_command(self, cmd: List[str]) -> str:
+        try:
+            return shlex.join(cmd)
+        except AttributeError:  # pragma: no cover - Python < 3.8 fallback
+            return " ".join(shlex.quote(part) for part in cmd)
+
+    def _run_command_capture(self, cmd: List[str]) -> Optional[str]:
+        print(f"[INFO] Executing: {self._format_command(cmd)}")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            print("[ERROR] Command not found. Ensure the tool is on your PATH.\n")
+            return None
+        except Exception as exc:
+            print(f"[ERROR] Failed to execute command: {exc}\n")
+            return None
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        if stdout:
+            print(stdout, end="" if stdout.endswith("\n") else "\n")
+        if stderr:
+            print(stderr, end="" if stderr.endswith("\n") else "\n")
+        if result.returncode not in (0, None):
+            print(f"[WARNING] Command exited with code {result.returncode}.\n")
+        combined = stdout
+        if stderr:
+            if combined and not combined.endswith("\n"):
+                combined += "\n"
+            combined += stderr
+        return combined
+
     def _format_header(self, title: str, target: str) -> str:
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
         return textwrap.dedent(
