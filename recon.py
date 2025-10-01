@@ -434,11 +434,11 @@ class ReconApp:
             print("[!] Target is required.\n")
             return
 
-        normalized_url = self._normalize_url(target)
-        report_path = self._create_report_path("web", normalized_url)
-        sections = [self._format_header("Web Footprinting", normalized_url)]
-        sections.append(self._http_preview(normalized_url, fetch_body=True))
-        sections.append(self._technology_fingerprint(normalized_url))
+        primary_url = self._build_url_candidates(target)[0]
+        report_path = self._create_report_path("web", primary_url)
+        sections = [self._format_header("Web Footprinting", primary_url)]
+        sections.append(self._http_preview(target, fetch_body=True))
+        sections.append(self._technology_fingerprint(target))
         content = "\n".join(section for section in sections if section)
         report_path.write_text(content)
         print(content)
@@ -908,19 +908,25 @@ class ReconApp:
         return "\n".join(lines)
 
     def _http_preview(self, target: str, *, fetch_body: bool = False) -> str:
-        url = self._normalize_url(target)
-        print(f"[INFO] Fetching {url}...")
-        request = urllib.request.Request(url, headers={"User-Agent": "Recon-Toolkit/1.0"})
-        try:
-            with urllib.request.urlopen(request, timeout=15, context=self.ssl_context) as response:
-                status = response.status
-                reason = response.reason
-                headers = dict(response.headers)
-                body = response.read(8192) if fetch_body else b""
-        except urllib.error.URLError as exc:
-            return f"HTTP request failed: {exc}"
+        last_error: Optional[Exception] = None
+        for url in self._build_url_candidates(target):
+            print(f"[INFO] Fetching {url}...")
+            request = urllib.request.Request(url, headers={"User-Agent": "Recon-Toolkit/1.0"})
+            try:
+                with urllib.request.urlopen(request, timeout=15, context=self.ssl_context) as response:
+                    status = response.status
+                    reason = response.reason
+                    headers = dict(response.headers)
+                    body = response.read(8192) if fetch_body else b""
+                break
+            except urllib.error.URLError as exc:
+                last_error = exc
+                continue
+        else:
+            return f"HTTP request failed: {last_error or 'Unable to reach host'}"
 
         lines = ["\n[+] HTTP Preview"]
+        lines.append(f"URL: {url}")
         lines.append(f"Status: {status} {reason}")
         for header in ("Server", "X-Powered-By", "Content-Type", "Set-Cookie"):
             if header in headers:
@@ -940,18 +946,30 @@ class ReconApp:
             return re.sub(r"\s+", " ", match.group(1)).strip()
         return None
 
-    def _technology_fingerprint(self, url: str) -> str:
+    def _technology_fingerprint(self, target: str) -> str:
         lines = ["\n[+] Technology Fingerprinting"]
         if self.dependency_manager.tool_available("whatweb"):
-            report_path = self._create_report_path("whatweb", url)
-            cmd = ["whatweb", url, "--log-json", str(report_path.with_suffix(".json"))]
-            print(f"[INFO] Running WhatWeb -> {report_path}")
-            try:
-                output = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            for candidate in self._build_url_candidates(target):
+                report_path = self._create_report_path("whatweb", candidate)
+                log_path = report_path.with_suffix(".json")
+                cmd = ["whatweb", candidate, "--log-json", str(log_path)]
+                print(f"[INFO] Running WhatWeb -> {report_path}")
+                try:
+                    output = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                except Exception as exc:
+                    lines.append(f"WhatWeb execution failed: {exc}")
+                    break
+
+                if output.returncode not in (0, None) and not output.stdout.strip():
+                    # Try the next candidate (e.g. fallback from HTTPS -> HTTP)
+                    print(f"[WARNING] WhatWeb returned code {output.returncode} for {candidate}. Trying fallback.")
+                    continue
+
                 lines.append(output.stdout.strip() or "See JSON log for details.")
-                lines.append(f"WhatWeb JSON log saved to {report_path.with_suffix('.json')}")
-            except Exception as exc:
-                lines.append(f"WhatWeb execution failed: {exc}")
+                lines.append(f"WhatWeb JSON log saved to {log_path}")
+                break
+            else:
+                lines.append("WhatWeb did not return data for any URL candidates.")
         else:
             lines.append("WhatWeb not available. Showing header-derived hints only.")
         return "\n".join(lines)
@@ -977,16 +995,77 @@ class ReconApp:
         elif nslookup_available:
             cmd = ["nslookup", "-type=" + record_type, domain]
         else:
-            # fallback using socket for basic A/AAAA
             if record_type in {"A", "AAAA"}:
                 return self._resolve_domain(domain)
             return "[!] dig/nslookup not available."
+
         try:
-            output = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            data = output.stdout.strip()
-            return data or ""
+            output = subprocess.run(
+                cmd, capture_output=True, text=True, check=False, timeout=15
+            )
+        except subprocess.TimeoutExpired:
+            return "[!] DNS query timed out."
         except Exception as exc:
             return f"DNS query failed: {exc}"
+
+        data = (output.stdout or "").strip()
+        if not data:
+            data = (output.stderr or "").strip()
+        if not data:
+            return ""
+
+        if dig_available:
+            return data
+        return "\n".join(self._parse_nslookup_output(data, record_type))
+
+    def _parse_nslookup_output(self, raw: str, record_type: str) -> List[str]:
+        values: List[str] = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            lowered = stripped.lower()
+            if lowered.startswith(
+                (
+                    "server:",
+                    "address:",
+                    "non-authoritative",
+                    "authoritative",
+                    "name:",
+                    "> ",
+                    "***",
+                )
+            ):
+                if record_type in {"A", "AAAA"} and lowered.startswith("address:"):
+                    value = stripped.split(":", 1)[-1].strip()
+                    if value:
+                        values.append(value)
+                continue
+
+            if " = " in stripped:
+                value = stripped.split("=", 1)[1].strip()
+            elif record_type in {"A", "AAAA"} and "address" in lowered:
+                value = stripped.split(None, 1)[-1].strip()
+            else:
+                # Fallback: use final token
+                value = stripped.split()[-1].strip()
+
+            if not value:
+                continue
+            if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+                value = value[1:-1]
+            value = value.rstrip('.')
+            values.append(value)
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_values = []
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            unique_values.append(value)
+        return unique_values
 
     def _subdomain_enumeration(self, domain: str) -> str:
         lines = ["\n[+] Subdomain Enumeration"]
@@ -1052,7 +1131,15 @@ class ReconApp:
         nameservers_output = self._query_dns(domain, "NS")
         if not nameservers_output or "[!]" in nameservers_output:
             return ""
-        nameservers = [line.strip().rstrip('.') for line in nameservers_output.splitlines() if line.strip()]
+        nameservers = []
+        for line in nameservers_output.splitlines():
+            candidate = line.strip().rstrip('.')
+            if not candidate:
+                continue
+            if not self._is_domain(candidate):
+                continue
+            if candidate not in nameservers:
+                nameservers.append(candidate)
         if not nameservers:
             return ""
         lines = ["\n[+] Zone Transfer Attempts"]
@@ -1104,10 +1191,17 @@ class ReconApp:
         filename = f"{timestamp}_{safe_target}_{prefix}.{extension}"
         return REPORTS_DIR / filename
 
-    def _normalize_url(self, target: str) -> str:
+    def _build_url_candidates(self, target: str) -> List[str]:
+        target = target.strip()
+        if not target:
+            return ["https://"]
         if re.match(r"^https?://", target, re.IGNORECASE):
-            return target
-        return f"https://{target}"
+            return [target]
+        host = target.lstrip('/')
+        return [f"https://{host}", f"http://{host}"]
+
+    def _normalize_url(self, target: str) -> str:
+        return self._build_url_candidates(target)[0]
 
     def _is_ip(self, value: str) -> bool:
         try:
