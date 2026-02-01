@@ -62,6 +62,20 @@ class DependencyManager:
             "subfinder": ToolMetadata(
                 "Subfinder", {"apt": "subfinder", "yum": "subfinder", "brew": "subfinder"}, optional=True
             ),
+            "besside-ng": ToolMetadata(
+                "Besside-ng",
+                {"apt": "aircrack-ng", "yum": "aircrack-ng", "brew": "aircrack-ng"},
+                optional=True,
+            ),
+            "hcxtools": ToolMetadata(
+                "HCXTools",
+                {"apt": "hcxtools", "yum": "hcxtools", "brew": "hcxtools"},
+                optional=True,
+                executables=["hcxpcapngtool", "hcxpcaptool"],
+            ),
+            "hashcat": ToolMetadata(
+                "Hashcat", {"apt": "hashcat", "yum": "hashcat", "brew": "hashcat"}, optional=True
+            ),
             "phoneinfoga": ToolMetadata(
                 friendly_name="PhoneInfoga",
                 packages={},
@@ -288,6 +302,7 @@ class ReconApp:
                 "6": self.osint_menu,
                 "7": self.utility_menu,
                 "8": self.dependencies_menu,
+                "9": self.wireless_menu,
                 "0": self.exit_app,
             }
             handler = handlers.get(choice)
@@ -313,6 +328,7 @@ class ReconApp:
         print("6) OSINT automation & social recon")
         print("7) Utility toolbox")
         print("8) Dependency health & installation")
+        print("9) Wireless capture & cracking")
         print("0) Exit")
         print("==============================")
 
@@ -359,6 +375,9 @@ class ReconApp:
         print("4) Aggressive scan with OS detection (-A)")
         print("5) Vulnerability scripts (--script vuln)")
         print("6) Custom command")
+        print("7) Host discovery / ping sweep (-sn)")
+        print("8) UDP scan (top 200 ports)")
+        print("9) Combined TCP+UDP service scan (top 100 ports)")
         print("0) Back to main menu")
         print("========================")
 
@@ -389,6 +408,12 @@ class ReconApp:
                 cmd = base_cmd + shlex.split(custom) + [target]
             else:
                 cmd = base_cmd + [target]
+        elif choice == "7":
+            cmd = base_cmd + ["-sn", target]
+        elif choice == "8":
+            cmd = base_cmd + ["-T4", "-Pn", "-sU", "--top-ports", "200", target]
+        elif choice == "9":
+            cmd = base_cmd + ["-T4", "-Pn", "-sS", "-sU", "--top-ports", "100", "-sV", target]
         else:
             print("[!] Invalid selection.\n")
             return
@@ -493,6 +518,143 @@ class ReconApp:
             return
         for line in process.stdout:
             print(line.rstrip())
+
+    # ------------------------------------------------------------------
+    # Wireless capture & cracking
+    # ------------------------------------------------------------------
+    def wireless_menu(self) -> None:
+        while True:
+            print("\nWireless Capture & Cracking")
+            print("---------------------------")
+            print("1) Besside-ng capture session")
+            print("2) HCXTools convert capture to hashcat format")
+            print("3) Hashcat cracking session")
+            print("0) Back to main menu")
+            choice = input("Choose an option: ").strip()
+            if choice == "1":
+                self.besside_capture()
+            elif choice == "2":
+                self.hcxtools_convert()
+            elif choice == "3":
+                self.hashcat_crack()
+            elif choice == "0":
+                print()
+                return
+            else:
+                print("[!] Invalid selection.\n")
+
+    def besside_capture(self) -> None:
+        base_cmd = self._get_tool_command("besside-ng")
+        if not base_cmd:
+            return
+        interface = input("Wireless interface (monitor mode): ").strip()
+        if not interface:
+            print("[!] Interface is required.\n")
+            return
+        channel = input("Channel (optional): ").strip()
+        bssid = input("Target BSSID (optional): ").strip()
+        extra_args = input("Additional Besside-ng flags (optional): ").strip()
+        output_path = self._create_report_path("besside", interface, extension="cap")
+        output_prefix = str(output_path.with_suffix(""))
+        cmd = list(base_cmd) + ["-i", interface, "-w", output_prefix]
+        if channel:
+            cmd += ["-c", channel]
+        if bssid:
+            cmd += ["-b", bssid]
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        print(
+            "[INFO] Launching Besside-ng. Press Ctrl+C to stop when enough data has been captured.\n"
+        )
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("besside_session", interface)
+        report_path.write_text(output or "[!] No output captured from Besside-ng.")
+        print(f"[+] Besside-ng output saved to {report_path}\n")
+        print(f"[INFO] Capture artifacts saved with prefix {output_prefix}\n")
+
+    def hcxtools_convert(self) -> None:
+        converter_cmd = self._get_hcxtools_converter()
+        if not converter_cmd:
+            return
+        capture_path = input("Path to .pcap/.pcapng capture file: ").strip()
+        if not capture_path:
+            print("[!] Capture file is required.\n")
+            return
+        capture = Path(capture_path)
+        if not capture.exists():
+            print("[!] Capture file not found.\n")
+            return
+        extra_args = input("Additional HCXTools flags (optional): ").strip()
+        output_path = self._create_report_path("hcxtools", capture.stem, extension="hc22000")
+        cmd = list(converter_cmd) + ["-o", str(output_path), str(capture)]
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("hcxtools_convert", capture.stem)
+        report_path.write_text(output or "[!] No output captured from HCXTools.")
+        print(f"[+] HCXTools conversion log saved to {report_path}\n")
+        print(f"[+] Hashcat-ready capture saved to {output_path}\n")
+
+    def hashcat_crack(self) -> None:
+        base_cmd = self._get_tool_command("hashcat")
+        if not base_cmd:
+            return
+        hash_path = input("Path to hash file (e.g. .hc22000): ").strip()
+        if not hash_path:
+            print("[!] Hash file is required.\n")
+            return
+        hash_file = Path(hash_path)
+        if not hash_file.exists():
+            print("[!] Hash file not found.\n")
+            return
+        run_mode = input("Run mode [attack/show] (default attack): ").strip().lower() or "attack"
+        hash_mode = input("Hash mode (-m) [default 22000]: ").strip() or "22000"
+        session_name = input("Session name (optional): ").strip()
+        extra_args = input("Additional Hashcat flags (optional): ").strip()
+        output_path = self._create_report_path("hashcat", hash_file.stem)
+        cmd = list(base_cmd) + ["-m", hash_mode, str(hash_file)]
+        if session_name:
+            cmd += ["--session", session_name]
+        if run_mode == "show":
+            cmd += ["--show", "--outfile", str(output_path)]
+        else:
+            attack_mode = input("Attack mode (-a) [default 0 = wordlist]: ").strip() or "0"
+            wordlist = input("Wordlist path (required for wordlist attacks): ").strip()
+            if attack_mode in {"0", "1"} and not wordlist:
+                print("[!] Wordlist path is required for the selected attack mode.\n")
+                return
+            rule_file = input("Rules file path (optional): ").strip()
+            cmd += ["-a", attack_mode]
+            if wordlist:
+                cmd.append(wordlist)
+            if rule_file:
+                cmd += ["-r", rule_file]
+            cmd += ["--outfile", str(output_path)]
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("hashcat_session", hash_file.stem)
+        report_path.write_text(output or "[!] No output captured from Hashcat.")
+        print(f"[+] Hashcat session log saved to {report_path}")
+        print(f"[+] Cracked hashes saved to {output_path}\n")
 
     # ------------------------------------------------------------------
     # OSINT automation & specialty tooling
@@ -787,6 +949,17 @@ class ReconApp:
         except ValueError as exc:
             print(f"[ERROR] Unable to parse command: {exc}\n")
             return None
+
+    def _get_hcxtools_converter(self) -> Optional[List[str]]:
+        base_cmd = self._get_tool_command("hcxtools")
+        if not base_cmd:
+            return None
+        candidate = Path(base_cmd[-1]).name
+        fallback = Path(base_cmd[0]).name
+        if candidate in {"hcxpcapngtool", "hcxpcaptool"} or fallback in {"hcxpcapngtool", "hcxpcaptool"}:
+            return base_cmd
+        print("[!] HCXTools conversion requires hcxpcapngtool or hcxpcaptool in your PATH.\n")
+        return None
 
     def _format_command(self, cmd: List[str]) -> str:
         try:

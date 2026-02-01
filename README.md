@@ -19,6 +19,8 @@ artifact-rich reports for later analysis.
   available) run WhatWeb fingerprinting with JSON logs.
 - **Packet capture & monitoring** – Browse available interfaces, set capture filters, and
   write `.pcap` files with a single keystroke to stop recording.
+- **Wireless capture & cracking pipeline** – Drive Besside-ng captures, convert with
+  HCXTools, and launch Hashcat sessions with structured report output.
 - **Utility toolbox** – Validate IPs/domains, resolve hosts, and perform reverse lookups.
 - **OSINT automation** – Launch PhoneInfoga, SpiderFoot, StormBreaker, Holehe, and
   Osintgram directly from the toolkit with automatic report export.
@@ -39,8 +41,7 @@ findings or hand them off to teammates.
   - `whois` – WHOIS lookups
   - `dig`/`nslookup` – detailed DNS queries
   - `whatweb` – web technology fingerprinting
-  - `subfinder` – high-fidelity subdomain enumeration
-  - `phoneinfoga`, `spiderfoot`, `stormbreaker`, `holehe`, `osintgram` – advanced OSINT
+  - `subfinder` – high-fidelity subdomain enumeration   - `besside-ng` (aircrack-ng), `hcxtools`, `hashcat` – wireless capture + cracking pipeline  - `phoneinfoga`, `spiderfoot`, `stormbreaker`, `holehe`, `osintgram` – advanced OSINT
     tooling surfaced in the dedicated automation menu (manual installation guidance shown
     in-app when missing)
 
