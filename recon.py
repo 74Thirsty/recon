@@ -2,11 +2,15 @@
 """Advanced interactive OSINT and network reconnaissance helper."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import ipaddress
 import json
 import os
 import platform
 import re
+import secrets
+import secretstorage
 import shlex
 import shutil
 import socket
@@ -169,6 +173,29 @@ class DependencyManager:
                     "Osintgram is normally executed from its repository. Clone "
                     "https://github.com/Datalux/Osintgram and run main.py with python3, or create "
                     "an 'osintgram' wrapper in your PATH."
+                ),
+            ),
+            "ghunt": ToolMetadata(
+                friendly_name="GHunt",
+                packages={},
+                optional=True,
+                executables=["ghunt"],
+                installer="pip",
+                install_hint=(
+                    "Install via pip (pip3 install ghunt) or consult "
+                    "https://github.com/mxrch/GHunt for manual setup steps."
+                ),
+            ),
+            "facebooktoolkit": ToolMetadata(
+                friendly_name="Facebook Toolkit++",
+                packages={"apt": "php php-curl composer", "yum": "php php-curl composer", "brew": "php composer"},
+                optional=True,
+                executables=["php"],
+                installer="facebooktoolkit",
+                install_hint=(
+                    "Clone https://github.com/warifp/FacebookToolkit, run 'composer install' inside it, "
+                    "and ensure 'php run.php' works. Set FACEBOOK_TOOLKIT_PATH env var or place in "
+                    "~/.local/share/recon/tools/facebooktoolkit/"
                 ),
             ),
             "curl": ToolMetadata(
@@ -344,6 +371,30 @@ class DependencyManager:
             ):
                 return False
             return self._write_python_wrapper("osintgram", repo_dir / "main.py")
+        if installer == "facebooktoolkit":
+            repo_dir = self.managed_root / "facebooktoolkit"
+            if not self._clone_or_update_repo("https://github.com/warifp/FacebookToolkit.git", repo_dir):
+                return False
+            composer = shutil.which("composer") or shutil.which("composer.phar")
+            if not composer:
+                print("[ERROR] Composer is required to install Facebook Toolkit dependencies.")
+                return False
+            if not self._run_install_command([composer, "install"], cwd=repo_dir):
+                return False
+            # Create wrapper script
+            self.managed_bin.mkdir(parents=True, exist_ok=True)
+            wrapper_path = self.managed_bin / "facebooktoolkit"
+            wrapper = f"""#!/bin/sh
+cd "{repo_dir}" && exec php run.php "$@"
+"""
+            try:
+                wrapper_path.write_text(wrapper)
+                wrapper_path.chmod(0o755)
+            except OSError as exc:
+                print(f"[ERROR] Could not create wrapper {wrapper_path}: {exc}")
+                return False
+            print(f"[INFO] Created launcher: {wrapper_path}")
+            return True
         print(f"[ERROR] Unknown installer recipe: {installer}")
         return False
 
@@ -407,22 +458,38 @@ def clear_screen() -> None:
 
 def display_banner() -> None:
     clear_screen()
-    print("========================================")
-    print("        RECON by C. Hirschauer")
-    print("========================================\n")
 
-    if shutil.which("figlet"):
-        try:
-            subprocess.run(["figlet", "-f", "slant", "RECON"], check=False)
-            print()
-        except Exception:
-            pass
+    banner = (
+        ",-----.                    ,-----.                       ,--.        \n"
+        "|  |) /_  ,--,--.,--,--,--.|  |) /_  ,---.  ,---. ,-----.|  | ,---.  \n"
+        "|  .-.  \\' ,-.  ||        ||  .-.  \\| .-. || .-. |`-.  / |  || .-. : \n"
+        "|  '--' /\\ '-'  ||  |  |  ||  '--' /' '-' '' '-' ' /  `-.|  |\\   --. \n"
+        "`------'  `--`--'`--`--`--'`------'  `---'  `---' `-----'`--' `----'"
+    )
+    print(banner)
+    print()
 
 
-class ReconApp:
+class BamBoozleApp:
     def __init__(self) -> None:
         self.dependency_manager = DependencyManager()
         self.ssl_context = ssl.create_default_context()
+
+    def _load_etherscan_key_from_kwallet(self) -> Optional[str]:
+        """Load ETHERSCAN_API_KEY from KWallet (service=gnoman, account=ETHERSCAN_API_KEY)."""
+        try:
+            conn = secretstorage.dbus_init()
+            collections = list(secretstorage.get_all_collections(conn))
+            for collection in collections:
+                if collection.is_locked():
+                    continue
+                for item in collection.get_all_items():
+                    attrs = item.get_attributes()
+                    if attrs.get("service") == "gnoman" and attrs.get("account") == "ETHERSCAN_API_KEY":
+                        return item.get_secret().decode()
+        except Exception:
+            pass
+        return None
 
     def run(self) -> None:
         display_banner()
@@ -457,7 +524,7 @@ class ReconApp:
 
     def print_main_menu(self) -> None:
         print("==============================")
-        print("  Advanced Reconnaissance Hub")
+        print("  BamBoozle")
         print("==============================")
         print("1) Smart target profile (IP/Domain intelligence)")
         print("2) Nmap scanning arsenal")
@@ -1575,6 +1642,7 @@ class ReconApp:
             print("4) Gather legal info (SpiderFoot + Whois)")
             print("5) Gather income info (SpiderFoot)")
             print("6) Gather career info (SpiderFoot + Osintgram)")
+            print("7) Gather Google account info (GHunt)")
             print("0) Back to main menu")
             choice = input("Choose an option: ").strip()
             if choice == "1":
@@ -1589,6 +1657,8 @@ class ReconApp:
                 self._spiderfoot_individual_workflow("income")
             elif choice == "6":
                 self._spiderfoot_individual_workflow("career")
+            elif choice == "7":
+                self.ghunt_lookup()
             elif choice == "0":
                 print()
                 return
@@ -1683,6 +1753,7 @@ class ReconApp:
             print("3) Reverse DNS lookup")
             print("4) Resolve domain to IPs")
             print("5) Show public IPv4 (forced IPv4 lookup)")
+            print("6) Wallet address lookup & encrypt")
             print("0) Back to main menu")
             choice = input("Choose an option: ").strip()
             if choice == "1":
@@ -1699,11 +1770,309 @@ class ReconApp:
                 print(self._resolve_domain(target))
             elif choice == "5":
                 print(self._public_ipv4_lookup())
+            elif choice == "6":
+                self.wallet_tool()
             elif choice == "0":
                 print()
                 break
             else:
                 print("[!] Invalid selection.\n")
+
+    # ------------------------------------------------------------------
+    # Wallet Address Lookup & Encryption
+    # ------------------------------------------------------------------
+    def wallet_tool(self) -> None:
+        """Cryptocurrency wallet address lookup and encryption tool."""
+        print("\nWallet Address Lookup & Encrypt")
+        print("--------------------------------")
+        print("Supported: Bitcoin (BTC), Ethereum (ETH), Litecoin (LTC),")
+        print("           Bitcoin Cash (BCH), Dogecoin (DOGE), Dash (DASH)")
+        print("           Tron (TRX), Ripple (XRP), Solana (SOL)")
+        print("           (add more via API endpoints)")
+        print()
+
+        address = input("Enter wallet address: ").strip()
+        if not address:
+            print("[!] No address provided.\n")
+            return
+
+        # Identify address type
+        addr_type = self._identify_wallet_address(address)
+        if not addr_type:
+            print("[!] Unrecognized address format. Supported formats:")
+            print("  BTC: 1..., 3..., bc1...")
+            print("  ETH: 0x...")
+            print("  LTC: L..., M..., ltc1...")
+            print("  BCH: bitcoincash:..., q..., p...")
+            print("  DOGE: D..., 9..., A...")
+            print("  DASH: X...")
+            print("  TRX: T...")
+            print("  XRP: r...")
+            print("  SOL: 32-44 base58 chars")
+            return
+
+        print(f"[+] Detected: {addr_type}")
+
+        # Lookup address info
+        print("[INFO] Querying blockchain explorer...")
+        info = self._lookup_wallet_address(address, addr_type)
+        if not info:
+            print("[!] No data returned from explorer.\n")
+            return
+
+        # Display results
+        print("\n[+] Address Information:")
+        for key, value in info.items():
+            print(f"  {key}: {value}")
+
+        # Encrypt the results
+        print("\n[+] Encrypting results...")
+        encrypted = self._encrypt_data(json.dumps(info, indent=2))
+        if encrypted:
+            # Save encrypted result
+            report_path = self._create_report_path("wallet", address, extension="enc")
+            report_path.write_text(encrypted)
+            print(f"[+] Encrypted data saved to: {report_path}")
+            print(f"[+] Decryption key (save this!): {encrypted.split(':')[0]}")
+        else:
+            print("[!] Encryption failed.")
+
+    def _identify_wallet_address(self, address: str) -> Optional[str]:
+        """Identify cryptocurrency type from address format."""
+        address = address.strip()
+
+        # Bitcoin: 1..., 3..., bc1...
+        if re.match(r'^(1|3)[a-km-zA-HJ-NP-Z1-9]{25,34}$', address):
+            return "Bitcoin (BTC)"
+        if re.match(r'^bc1[a-z0-9]{39,59}$', address, re.IGNORECASE):
+            return "Bitcoin (BTC) - Bech32"
+
+        # Ethereum: 0x...
+        if re.match(r'^0x[a-fA-F0-9]{40}$', address):
+            return "Ethereum (ETH)"
+
+        # Litecoin: L..., M..., ltc1...
+        if re.match(r'^[LM][a-km-zA-HJ-NP-Z1-9]{26,33}$', address):
+            return "Litecoin (LTC)"
+        if re.match(r'^ltc1[a-z0-9]{39,59}$', address, re.IGNORECASE):
+            return "Litecoin (LTC) - Bech32"
+
+        # Bitcoin Cash: bitcoincash:..., q..., p...
+        if re.match(r'^bitcoincash:[qp][a-z0-9]{41}$', address, re.IGNORECASE):
+            return "Bitcoin Cash (BCH)"
+        if re.match(r'^[qp][a-z0-9]{41}$', address):
+            return "Bitcoin Cash (BCH)"
+
+        # Dogecoin: D..., 9..., A...
+        if re.match(r'^D[5-9A-HJ-NP-U][a-km-zA-HJ-NP-Z1-9]{32}$', address):
+            return "Dogecoin (DOGE)"
+        if re.match(r'^[9A][a-km-zA-HJ-NP-Z1-9]{32,33}$', address):
+            return "Dogecoin (DOGE)"
+
+        # Dash: X...
+        if re.match(r'^X[1-9A-HJ-NP-Za-km-z]{33,34}$', address):
+            return "Dash (DASH)"
+
+        # Tron: T...
+        if re.match(r'^T[a-zA-Z0-9]{33}$', address):
+            return "Tron (TRX)"
+
+        # Ripple/XRP: r...
+        if re.match(r'^r[0-9a-zA-Z]{24,34}$', address):
+            return "Ripple (XRP)"
+
+        # Solana: 32-44 base58 chars
+        if re.match(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$', address):
+            return "Solana (SOL)"
+
+        return None
+
+    def _lookup_wallet_address(self, address: str, addr_type: str) -> Optional[Dict]:
+        """Query blockchain explorer API for address info."""
+        url = self._get_explorer_url(address, addr_type)
+        if not url:
+            return None
+
+        print(f"[INFO] Querying: {url}")
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "BamBoozle/1.0"})
+            with urllib.request.urlopen(request, timeout=30, context=self.ssl_context) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            print(f"[!] API request failed: {exc}")
+            return None
+
+        return self._parse_explorer_response(data, addr_type, address)
+
+    def _get_explorer_url(self, address: str, addr_type: str) -> Optional[str]:
+        """Get the appropriate blockchain explorer API URL."""
+        addr_lower = addr_type.lower()
+
+        if "bitcoin" in addr_lower and "cash" not in addr_lower:
+            return f"https://blockchain.info/rawaddr/{address}"
+        if "ethereum" in addr_lower:
+            # Using Etherscan API with key from KWallet
+            key = self._load_etherscan_key_from_kwallet()
+            if key:
+                return f"https://api.etherscan.io/api?module=account&action=balance&address={address}&tag=latest&apikey={key}"
+            return f"https://api.etherscan.io/api?module=account&action=balance&address={address}&tag=latest"
+        if "litecoin" in addr_lower:
+            return f"https://chainz.cryptoid.info/ltc/api.dws?q=getbalance&a={address}"
+        if "bitcoin cash" in addr_lower:
+            return f"https://rest.bitcoin.com/v2/address/details/{address}"
+        if "dogecoin" in addr_lower:
+            return f"https://dogechain.info/api/v1/address/balance/{address}"
+        if "dash" in addr_lower:
+            return f"https://insight.dash.org/insight-api/addr/{address}"
+        if "tron" in addr_lower:
+            return f"https://apilist.tronscan.org/api/account?address={address}"
+        if "ripple" in addr_lower or "xrp" in addr_lower:
+            return f"https://data.ripple.com/v2/accounts/{address}/balances"
+        if "solana" in addr_lower:
+            return f"https://api.mainnet-beta.solana.com/getAccountInfo?pubkey={address}"
+
+        return None
+
+    def _parse_explorer_response(self, data: Dict, addr_type: str, address: str = "") -> Dict:
+        """Parse API response into standardized format."""
+        result = {"address_type": addr_type}
+
+        addr_lower = addr_type.lower()
+
+        if "bitcoin" in addr_lower and "cash" not in addr_lower:
+            # blockchain.info format
+            result["balance_satoshi"] = data.get("final_balance", 0)
+            result["balance_btc"] = data.get("final_balance", 0) / 100000000
+            result["total_received_satoshi"] = data.get("total_received", 0)
+            result["total_sent_satoshi"] = data.get("total_sent", 0)
+            result["tx_count"] = data.get("n_tx", 0)
+            if "txs" in data and data["txs"]:
+                result["recent_txs"] = len(data["txs"])
+
+        elif "ethereum" in addr_lower:
+            # Etherscan format: {"status":"1","message":"OK","result":"123456789"}
+            # or {"status":"0","message":"NOTOK","result":"Error message"}
+            if data.get("status") == "1" and "result" in data:
+                try:
+                    balance_wei = int(data.get("result", "0"))
+                    result["balance_wei"] = balance_wei
+                    result["balance_eth"] = balance_wei / 1e18
+                except (ValueError, TypeError):
+                    pass
+            elif data.get("status") == "0":
+                result["error"] = data.get("message", "API error")
+
+        elif "litecoin" in addr_lower:
+            # chainz format
+            balance = data.get("balance", "0")
+            result["balance_ltc"] = float(balance) if balance else 0
+
+        elif "bitcoin cash" in addr_lower:
+            result["balance_satoshi"] = data.get("balance", 0)
+            result["balance_bch"] = data.get("balance", 0) / 100000000
+            result["total_received_satoshi"] = data.get("totalReceived", 0)
+            result["total_sent_satoshi"] = data.get("totalSent", 0)
+            result["tx_count"] = data.get("txCount", 0)
+
+        elif "dogecoin" in addr_lower:
+            result["balance_doge"] = data.get("balance", 0) / 1e8
+            result["received_doge"] = data.get("received", 0) / 1e8
+            result["sent_doge"] = data.get("sent", 0) / 1e8
+
+        elif "dash" in addr_lower:
+            result["balance_dash"] = data.get("balance", 0) / 1e8
+            result["total_received_dash"] = data.get("totalReceived", 0) / 1e8
+            result["total_sent_dash"] = data.get("totalSent", 0) / 1e8
+            result["tx_count"] = data.get("txApperances", 0)
+
+        elif "tron" in addr_lower:
+            result["balance_trx"] = data.get("balance", 0) / 1e6
+            result["total_tx"] = data.get("totalTransactionCount", 0)
+
+        elif "ripple" in addr_lower or "xrp" in addr_lower:
+            balances = data.get("balances", [])
+            if balances:
+                result["balance_xrp"] = float(balances[0].get("value", 0))
+
+        elif "solana" in addr_lower:
+            if "result" in data and data["result"]:
+                result["lamports"] = data["result"].get("value", {}).get("lamports", 0)
+                result["owner"] = data["result"].get("value", {}).get("owner", "")
+                result["executable"] = data["result"].get("value", {}).get("executable", False)
+
+        return result
+
+    def _encrypt_data(self, data: str) -> Optional[str]:
+        """Encrypt data using AES-256-CBC via openssl."""
+        # Generate a random 32-byte key and 16-byte IV
+        key = secrets.token_bytes(32)
+        iv = secrets.token_bytes(16)
+
+        # Use openssl for encryption (available on most systems)
+        openssl = shutil.which("openssl")
+        if not openssl:
+            print("[!] openssl not found. Install openssl for encryption.")
+            return None
+
+        try:
+            # Encrypt using AES-256-CBC (more widely supported than GCM)
+            cmd = [
+                openssl, "enc", "-aes-256-cbc",
+                "-K", key.hex(),
+                "-iv", iv.hex(),
+                ]
+            proc = subprocess.run(cmd, input=data.encode(), capture_output=True, check=False)
+            if proc.returncode != 0:
+                print(f"[!] Encryption failed: {proc.stderr.decode()}")
+                return None
+
+            ciphertext = proc.stdout
+
+            # Combine key:iv:ciphertext as base64
+            key_b64 = base64.b64encode(key).decode()
+            iv_b64 = base64.b64encode(iv).decode()
+            ct_b64 = base64.b64encode(ciphertext).decode()
+
+            return f"{key_b64}:{iv_b64}:{ct_b64}"
+
+        except Exception as exc:
+            print(f"[!] Encryption error: {exc}")
+            return None
+
+    def _decrypt_data(self, encrypted: str) -> Optional[str]:
+        """Decrypt data encrypted with _encrypt_data."""
+        try:
+            parts = encrypted.split(":")
+            if len(parts) != 3:
+                return None
+
+            key_b64, iv_b64, ct_b64 = parts
+            key = base64.b64decode(key_b64)
+            iv = base64.b64decode(iv_b64)
+            ciphertext = base64.b64decode(ct_b64)
+
+            openssl = shutil.which("openssl")
+            if not openssl:
+                return None
+
+            # Decrypt using openssl
+            cmd = [
+                openssl, "enc", "-d", "-aes-256-cbc",
+                "-K", key.hex(),
+                "-iv", iv.hex(),
+                "-in", "/dev/stdin",
+                "-out", "/dev/stdout"
+            ]
+
+            proc = subprocess.run(cmd, input=ciphertext, capture_output=True, check=False)
+            if proc.returncode != 0:
+                return None
+
+            return proc.stdout.decode()
+
+        except Exception:
+            pass
+        return None
 
     # ------------------------------------------------------------------
     # Dependency helper
@@ -1735,7 +2104,7 @@ class ReconApp:
         self.dependency_manager.ensure_tool(tool, interactive=False)
         print(f"[!] {friendly} command was not detected on PATH.")
         self.dependency_manager.ensure_tool(tool, interactive=False)
-        print("[!] Recon no longer accepts ad-hoc command strings for tool execution.")
+        print("[!] BamBoozle no longer accepts ad-hoc command strings for tool execution.")
         print("    Install the expected executable and rerun this workflow.\n")
         return None
 
@@ -1891,7 +2260,7 @@ class ReconApp:
         last_error: Optional[Exception] = None
         for url in self._build_url_candidates(target):
             print(f"[INFO] Fetching {url}...")
-            request = urllib.request.Request(url, headers={"User-Agent": "Recon-Toolkit/1.0"})
+            request = urllib.request.Request(url, headers={"User-Agent": "BamBoozle/1.0"})
             try:
                 with urllib.request.urlopen(request, timeout=15, context=self.ssl_context) as response:
                     status = response.status
@@ -2200,7 +2569,7 @@ class ReconApp:
 
 
 def main() -> None:
-    app = ReconApp()
+    app = BamBoozleApp()
     try:
         app.run()
     except KeyboardInterrupt:

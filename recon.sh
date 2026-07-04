@@ -1,5 +1,5 @@
 #!/bin/bash
-# Wrapper to launch the advanced Python-based Recon toolkit.
+# Wrapper to launch the BamBoozle toolkit.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN=""
