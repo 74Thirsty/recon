@@ -37,6 +37,7 @@ class ToolMetadata:
     optional: bool = False
     executables: Optional[List[str]] = None
     install_hint: Optional[str] = None
+    installer: Optional[str] = None
 
 
 class DependencyManager:
@@ -117,9 +118,10 @@ class DependencyManager:
                 packages={},
                 optional=True,
                 executables=["phoneinfoga", "phoneinfoga.py"],
+                installer="go",
                 install_hint=(
-                    "Install via pip (pip3 install phoneinfoga) or follow the instructions "
-                    "at https://github.com/sundowndev/PhoneInfoga."
+                    "Install with Go using: go install "
+                    "github.com/sundowndev/phoneinfoga/v2/cmd/phoneinfoga@latest"
                 ),
             ),
             "spiderfoot": ToolMetadata(
@@ -127,6 +129,7 @@ class DependencyManager:
                 packages={},
                 optional=True,
                 executables=["sfcli", "spiderfoot", "sfcli.py"],
+                installer="spiderfoot",
                 install_hint=(
                     "SpiderFoot does not have a native package in most distributions. Clone the "
                     "project from https://github.com/smicallef/spiderfoot and expose sfcli.py on "
@@ -138,6 +141,7 @@ class DependencyManager:
                 packages={},
                 optional=True,
                 executables=["stormbreaker", "storm-breaker", "stormbreaker.py"],
+                installer="stormbreaker",
                 install_hint=(
                     "StormBreaker typically runs from its Git repository. Clone "
                     "https://github.com/ultrasecurity/Storm-Breaker and expose the launcher "
@@ -149,6 +153,7 @@ class DependencyManager:
                 packages={},
                 optional=True,
                 executables=["holehe"],
+                installer="pip",
                 install_hint=(
                     "Install via pip (pip3 install holehe) or consult "
                     "https://github.com/megadose/holehe for manual setup steps."
@@ -159,6 +164,7 @@ class DependencyManager:
                 packages={},
                 optional=True,
                 executables=["osintgram"],
+                installer="osintgram",
                 install_hint=(
                     "Osintgram is normally executed from its repository. Clone "
                     "https://github.com/Datalux/Osintgram and run main.py with python3, or create "
@@ -171,6 +177,8 @@ class DependencyManager:
                 optional=True,
             ),
         }
+        self.managed_root = Path.home() / ".local" / "share" / "recon" / "tools"
+        self.managed_bin = Path.home() / ".local" / "bin"
 
     def tool_available(self, tool: str) -> bool:
         if tool in self.tools:
@@ -182,6 +190,10 @@ class DependencyManager:
         candidates = metadata.executables if metadata and metadata.executables else [tool]
         for candidate in candidates:
             path = shutil.which(candidate)
+            if not path:
+                managed_path = self.managed_bin / candidate
+                if managed_path.exists():
+                    path = str(managed_path)
             if not path:
                 continue
             if path.endswith(".py"):
@@ -204,49 +216,6 @@ class DependencyManager:
             message += " This feature is optional but recommended."
         print(message)
 
-
-        # Always prompt for install, even if no package mapping
-        response = input("Attempt automatic installation? [y/N]: ").strip().lower()
-        if response != "y":
-            print("Skipped automatic installation. Please install manually using your package manager or the instructions below.")
-            if metadata.install_hint:
-                print(f"Manual install: {metadata.install_hint}")
-            else:
-                print(f"No automatic install available for '{tool}'. Please refer to the official documentation or project page.")
-            print(f"Example: Search for '{tool}' on GitHub or the official site, download the binary or clone the repo, and place the executable in your PATH.")
-            return False
-
-        # If package mapping exists, try auto-install
-        if metadata.packages:
-            if not self._attempt_install(tool, metadata.packages):
-                print("[ERROR] Unable to install automatically. Please install manually.")
-                if metadata.install_hint:
-                    print(metadata.install_hint)
-                return False
-            if self.tool_available(tool):
-                print(f"[INFO] {metadata.friendly_name} installed successfully.")
-                return True
-            print(f"[WARNING] {metadata.friendly_name} still not detected after installation attempt.")
-            if metadata.install_hint:
-                print(metadata.install_hint)
-            return False
-        else:
-            # No package mapping: open install link or print instructions
-            if metadata.install_hint and metadata.install_hint.startswith("http"):
-                import webbrowser
-                print(f"Opening install page: {metadata.install_hint}")
-                try:
-                    webbrowser.open(metadata.install_hint)
-                except Exception:
-                    print("[ERROR] Could not open browser. Please visit the link manually.")
-            else:
-                print("[INFO] Please follow these instructions to install:")
-                if metadata.install_hint:
-                    print(metadata.install_hint)
-                else:
-                    print(f"No automatic install available for '{tool}'. Please refer to the official documentation or project page.")
-            return False
-
         if not interactive:
             if metadata.install_hint:
                 print(metadata.install_hint)
@@ -257,7 +226,7 @@ class DependencyManager:
             print("Skipped automatic installation. Please install manually using your package manager.")
             return False
 
-        if not self._attempt_install(tool, metadata.packages):
+        if not self._attempt_install(tool, metadata):
             print("[ERROR] Unable to install automatically. Please install manually.")
             if metadata.install_hint:
                 print(metadata.install_hint)
@@ -272,7 +241,15 @@ class DependencyManager:
             print(metadata.install_hint)
         return False
 
-    def _attempt_install(self, tool: str, packages: Dict[str, str]) -> bool:
+    def _attempt_install(self, tool: str, metadata: ToolMetadata) -> bool:
+        if metadata.installer:
+            return self._attempt_custom_install(tool, metadata.installer)
+
+        packages = metadata.packages
+        if not packages:
+            print("[ERROR] No automatic install recipe is configured for this tool.")
+            return False
+
         system = platform.system()
         package_manager = None
         if system == "Linux":
@@ -320,6 +297,90 @@ class DependencyManager:
             return False
         except FileNotFoundError:
             print("[ERROR] Installation command not found. Ensure the package manager is available.")
+            return False
+        return True
+
+    def _attempt_custom_install(self, tool: str, installer: str) -> bool:
+        if installer == "pip":
+            return self._run_install_command([sys.executable, "-m", "pip", "install", "--user", tool])
+        if installer == "go":
+            if not shutil.which("go"):
+                print("[ERROR] Go is required to install this tool automatically.")
+                return False
+            return self._run_install_command(
+                ["go", "install", "github.com/sundowndev/phoneinfoga/v2/cmd/phoneinfoga@latest"]
+            )
+        if installer == "spiderfoot":
+            repo_dir = self.managed_root / "spiderfoot"
+            if not self._clone_or_update_repo("https://github.com/smicallef/spiderfoot.git", repo_dir):
+                return False
+            requirements = repo_dir / "requirements.txt"
+            if requirements.exists() and not self._run_install_command(
+                [sys.executable, "-m", "pip", "install", "--user", "-r", str(requirements)]
+            ):
+                return False
+            return self._write_python_wrapper("sfcli.py", repo_dir / "sfcli.py")
+        if installer == "stormbreaker":
+            repo_dir = self.managed_root / "stormbreaker"
+            if not self._clone_or_update_repo("https://github.com/ultrasecurity/Storm-Breaker.git", repo_dir):
+                return False
+            requirements = repo_dir / "requirements.txt"
+            if requirements.exists() and not self._run_install_command(
+                [sys.executable, "-m", "pip", "install", "--user", "-r", str(requirements)]
+            ):
+                return False
+            for launcher in ("stormbreaker.py", "storm-breaker.py", "Storm-Breaker.py", "st.py", "main.py"):
+                if (repo_dir / launcher).exists():
+                    return self._write_python_wrapper("stormbreaker", repo_dir / launcher)
+            print("[ERROR] Could not find a StormBreaker launcher after cloning.")
+            return False
+        if installer == "osintgram":
+            repo_dir = self.managed_root / "osintgram"
+            if not self._clone_or_update_repo("https://github.com/Datalux/Osintgram.git", repo_dir):
+                return False
+            requirements = repo_dir / "requirements.txt"
+            if requirements.exists() and not self._run_install_command(
+                [sys.executable, "-m", "pip", "install", "--user", "-r", str(requirements)]
+            ):
+                return False
+            return self._write_python_wrapper("osintgram", repo_dir / "main.py")
+        print(f"[ERROR] Unknown installer recipe: {installer}")
+        return False
+
+    def _clone_or_update_repo(self, url: str, repo_dir: Path) -> bool:
+        if not shutil.which("git"):
+            print("[ERROR] git is required to install this tool automatically.")
+            return False
+        self.managed_root.mkdir(parents=True, exist_ok=True)
+        if repo_dir.exists():
+            return self._run_install_command(["git", "-C", str(repo_dir), "pull", "--ff-only"])
+        return self._run_install_command(["git", "clone", "--depth", "1", url, str(repo_dir)])
+
+    def _write_python_wrapper(self, command_name: str, script_path: Path) -> bool:
+        if not script_path.exists():
+            print(f"[ERROR] Expected launcher was not found: {script_path}")
+            return False
+        self.managed_bin.mkdir(parents=True, exist_ok=True)
+        wrapper_path = self.managed_bin / command_name
+        wrapper = "#!/bin/sh\nexec python3 " + shlex.quote(str(script_path)) + ' "$@"\n'
+        try:
+            wrapper_path.write_text(wrapper)
+            wrapper_path.chmod(0o755)
+        except OSError as exc:
+            print(f"[ERROR] Could not create wrapper {wrapper_path}: {exc}")
+            return False
+        print(f"[INFO] Created launcher: {wrapper_path}")
+        return True
+
+    def _run_install_command(self, cmd: List[str]) -> bool:
+        print("[INFO] Running:", " ".join(shlex.quote(part) for part in cmd))
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as exc:
+            print(f"[ERROR] Installation command failed with exit code {exc.returncode}.")
+            return False
+        except FileNotFoundError:
+            print("[ERROR] Installation command not found.")
             return False
         return True
 

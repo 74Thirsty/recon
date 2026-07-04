@@ -105,29 +105,31 @@ main() → ReconApp.__init__() → ReconApp.run()
 
 ### Optional Tools
 
-| Tool | Package | Purpose |
-|------|---------|---------|
-| `figlet` | figlet | ASCII art banner |
-| `whois` | whois | WHOIS lookups |
-| `dig` | dnsutils / bind-utils / bind | DNS record queries |
-| `nslookup` | dnsutils / bind-utils / bind | DNS fallback queries |
-| `whatweb` | whatweb | Web technology fingerprinting |
-| `subfinder` | subfinder | Subdomain enumeration |
-| `airmon-ng` | aircrack-ng | Monitor mode enable/disable |
-| `airodump-ng` | aircrack-ng | 802.11 packet capture |
-| `aireplay-ng` | aircrack-ng | Deauthentication attacks |
-| `besside-ng` | aircrack-ng | Automated WPA capture |
-| `wash` | reaver | WPS network discovery |
-| `reaver` | reaver | WPS PIN brute-force |
-| `iw` | iw | Wireless interface enumeration |
-| `hcxtools` | hcxtools | pcap → hashcat format conversion |
-| `hashcat` | hashcat | Password cracking |
-| `curl` | curl | Public IP lookup |
-| `phoneinfoga` | pip (phoneinfoga) | Phone number intelligence |
-| `spiderfoot` | manual (GitHub) | Multi-source OSINT |
-| `stormbreaker` | manual (GitHub) | Payload/orchestration OSINT |
-| `holehe` | pip (holehe) | Email registration enumeration |
-| `osintgram` | manual (GitHub) | Instagram intelligence |
+| Tool | Purpose |
+|------|---------|
+| `figlet` | ASCII art banner |
+| `whois` | WHOIS lookups |
+| `dig` | DNS record queries |
+| `nslookup` | DNS fallback queries |
+| `whatweb` | Web technology fingerprinting |
+| `subfinder` | Subdomain enumeration |
+| `airmon-ng` | Monitor mode enable/disable |
+| `airodump-ng` | 802.11 packet capture |
+| `aireplay-ng` | Deauthentication attacks |
+| `besside-ng` | Automated WPA capture |
+| `wash` | WPS network discovery |
+| `reaver` | WPS PIN brute-force |
+| `iw` | Wireless interface enumeration |
+| `hcxtools` | pcap to hashcat format conversion |
+| `hashcat` | Password cracking |
+| `curl` | Public IP lookup |
+| `phoneinfoga` | Phone number intelligence |
+| `spiderfoot` | Multi-source OSINT |
+| `stormbreaker` | Payload/orchestration OSINT |
+| `holehe` | Email registration enumeration |
+| `osintgram` | Instagram intelligence |
+
+Install recipes are centralized in [Dependency Manager](#20-dependency-manager).
 
 ### Platform Support
 
@@ -405,20 +407,9 @@ All workflows output JSON to `reports/`.
 2. Prompts for a tool name to attempt installation
 3. Runs `DependencyManager.ensure_tool(tool)` for guided install
 
-### Auto-Installation
+### Install Behavior
 
-The dependency manager detects your OS and package manager, then runs the appropriate install command:
-
-| Package Manager | Detection | Install Command |
-|-----------------|-----------|-----------------|
-| apt | `/usr/bin/apt` or `/usr/bin/apt-get` | `sudo apt install -y {package}` |
-| dnf | `/usr/bin/dnf` | `sudo dnf install -y {package}` |
-| yum | `/usr/bin/yum` | `sudo yum install -y {package}` |
-| pacman | `/usr/bin/pacman` | `sudo pacman -S --noconfirm {package}` |
-| apk | `/sbin/apk` | `sudo apk add {package}` |
-| brew | `/usr/local/bin/brew` or `/opt/homebrew/bin/brew` | `brew install {package}` |
-
-If auto-install fails, the app shows the exact package names to install manually.
+Recon never installs silently. Option 9 checks tool status, asks which missing tool to install, then runs the centralized recipe documented in [Dependency Manager](#20-dependency-manager) only after the user confirms `Attempt automatic installation? [y/N]:`.
 
 ---
 
@@ -993,33 +984,60 @@ Service management commands (`systemctl`, `service`) are always run through `sud
 
 ## 20. Dependency Manager
 
+This section is the single source of truth for tool install recipes. Other sections describe what a tool does and refer back here for installation behavior.
+
+### User-Confirmed Auto-Installation
+
+Recon never installs silently. When a missing tool is selected, Recon asks:
+
+```text
+Attempt automatic installation? [y/N]:
+```
+
+If the user answers `y`, the dependency manager runs the configured install recipe for that tool.
+
+For package-manager tools, Recon detects your OS and package manager, then runs the appropriate install command:
+
+| Package Manager | Detection | Install Command |
+|-----------------|-----------|-----------------|
+| apt | `/usr/bin/apt` or `/usr/bin/apt-get` | `sudo apt install -y {package}` |
+| dnf | `/usr/bin/dnf` | `sudo dnf install -y {package}` |
+| yum | `/usr/bin/yum` | `sudo yum install -y {package}` |
+| pacman | `/usr/bin/pacman` | `sudo pacman -S --noconfirm {package}` |
+| apk | `/sbin/apk` | `sudo apk add {package}` |
+| brew | `/usr/local/bin/brew` or `/opt/homebrew/bin/brew` | `brew install {package}` |
+
+GitHub-backed tools are stored under `~/.local/share/recon/tools`. Launchers are created in `~/.local/bin`, and Recon checks that directory when resolving commands.
+
+If auto-install fails, the app shows the failed command and the manual install hint.
+
 ### Registered Tools (22)
 
-| Key | Friendly Name | Package | Optional | Executables |
-|-----|---------------|---------|----------|-------------|
-| `nmap` | Nmap | nmap | **No** | `nmap` |
-| `tshark` | TShark | wireshark | **No** | `tshark` |
-| `figlet` | Figlet | figlet | Yes | `figlet` |
-| `whois` | Whois | whois | Yes | `whois` |
-| `dig` | Dig | dnsutils/bind-utils/bind | Yes | `dig` |
-| `nslookup` | Nslookup | dnsutils/bind-utils/bind | Yes | `nslookup` |
-| `whatweb` | WhatWeb | whatweb | Yes | `whatweb` |
-| `subfinder` | Subfinder | subfinder | Yes | `subfinder` |
-| `airmon-ng` | Airmon-ng | aircrack-ng | Yes | `airmon-ng` |
-| `airodump-ng` | Airodump-ng | aircrack-ng | Yes | `airodump-ng` |
-| `aireplay-ng` | Aireplay-ng | aircrack-ng | Yes | `aireplay-ng` |
-| `besside-ng` | Besside-ng | aircrack-ng | Yes | `besside-ng` |
-| `wash` | Wash | reaver | Yes | `wash` |
-| `reaver` | Reaver | reaver | Yes | `reaver` |
-| `iw` | iw | iw | Yes | `iw` |
-| `hcxtools` | HCXTools | hcxtools | Yes | `hcxpcapngtool`, `hcxpcaptool` |
-| `hashcat` | Hashcat | hashcat | Yes | `hashcat` |
-| `curl` | curl | curl | Yes | `curl` |
-| `phoneinfoga` | PhoneInfoga | pip | Yes | `phoneinfoga`, `phoneinfoga.py` |
-| `spiderfoot` | SpiderFoot | manual | Yes | `sfcli`, `spiderfoot`, `sfcli.py` |
-| `stormbreaker` | StormBreaker | manual | Yes | `stormbreaker`, `storm-breaker`, `stormbreaker.py` |
-| `holehe` | Holehe | pip | Yes | `holehe` |
-| `osintgram` | Osintgram | manual | Yes | `osintgram` |
+| Key | Friendly Name | Install Recipe | Optional | Executables |
+|-----|---------------|----------------|----------|-------------|
+| `nmap` | Nmap | Package manager: `nmap` | **No** | `nmap` |
+| `tshark` | TShark | Package manager: `wireshark` | **No** | `tshark` |
+| `figlet` | Figlet | Package manager: `figlet` | Yes | `figlet` |
+| `whois` | Whois | Package manager: `whois` | Yes | `whois` |
+| `dig` | Dig | Package manager: `dnsutils` / `bind-utils` / `bind` | Yes | `dig` |
+| `nslookup` | Nslookup | Package manager: `dnsutils` / `bind-utils` / `bind` | Yes | `nslookup` |
+| `whatweb` | WhatWeb | Package manager: `whatweb` | Yes | `whatweb` |
+| `subfinder` | Subfinder | Package manager: `subfinder` | Yes | `subfinder` |
+| `airmon-ng` | Airmon-ng | Package manager: `aircrack-ng` | Yes | `airmon-ng` |
+| `airodump-ng` | Airodump-ng | Package manager: `aircrack-ng` | Yes | `airodump-ng` |
+| `aireplay-ng` | Aireplay-ng | Package manager: `aircrack-ng` | Yes | `aireplay-ng` |
+| `besside-ng` | Besside-ng | Package manager: `aircrack-ng` | Yes | `besside-ng` |
+| `wash` | Wash | Package manager: `reaver` | Yes | `wash` |
+| `reaver` | Reaver | Package manager: `reaver` | Yes | `reaver` |
+| `iw` | iw | Package manager: `iw` | Yes | `iw` |
+| `hcxtools` | HCXTools | Package manager: `hcxtools` | Yes | `hcxpcapngtool`, `hcxpcaptool` |
+| `hashcat` | Hashcat | Package manager: `hashcat` | Yes | `hashcat` |
+| `curl` | curl | Package manager: `curl` | Yes | `curl` |
+| `phoneinfoga` | PhoneInfoga | `go install github.com/sundowndev/phoneinfoga/v2/cmd/phoneinfoga@latest` | Yes | `phoneinfoga`, `phoneinfoga.py` |
+| `spiderfoot` | SpiderFoot | Clone `https://github.com/smicallef/spiderfoot.git`, install requirements, create `sfcli.py` launcher | Yes | `sfcli`, `spiderfoot`, `sfcli.py` |
+| `stormbreaker` | StormBreaker | Clone `https://github.com/ultrasecurity/Storm-Breaker.git`, install requirements, create `stormbreaker` launcher | Yes | `stormbreaker`, `storm-breaker`, `stormbreaker.py` |
+| `holehe` | Holehe | `python3 -m pip install --user holehe` | Yes | `holehe` |
+| `osintgram` | Osintgram | Clone `https://github.com/Datalux/Osintgram.git`, install requirements, create `osintgram` launcher | Yes | `osintgram` |
 
 ### Python Script Handling
 
@@ -1027,6 +1045,8 @@ For tools distributed as `.py` files (PhoneInfoga, SpiderFoot, StormBreaker), th
 ```
 python3 /path/to/script.py [args]
 ```
+
+For tools installed from GitHub by Recon, wrappers are written to `~/.local/bin` and point back to the cloned checkout under `~/.local/share/recon/tools`.
 
 ---
 
