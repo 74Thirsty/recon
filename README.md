@@ -1,4 +1,6 @@
-# BamBoozle — Technical Manual
+# Recon — Technical Manual
+
+![Sheen Banner](https://github.com/74Thirsty/74Thirsty/blob/main/assets/recon-animated-banner.svg)
 
 **Author:** C. Hirschauer  
 **License:** MIT  
@@ -38,7 +40,7 @@
 
 ## 1. Architecture Overview
 
-BamBoozle is a single-file Python application (`recon.py`, ~2150 lines) with a bash launcher (`recon.sh`). It uses **zero third-party packages** — every import is from the Python standard library. External tools (nmap, tshark, hashcat, etc.) are invoked via `subprocess` and resolved through a built-in dependency manager.
+Recon is a single-file Python application (`recon.py`, ~2150 lines) with a bash launcher (`recon.sh`). It uses **zero third-party packages** — every import is from the Python standard library. External tools (nmap, tshark, hashcat, etc.) are invoked via `subprocess` and resolved through a built-in dependency manager.
 
 ### File Structure
 
@@ -68,13 +70,13 @@ recon/
 ```
 ToolMetadata          — Dataclass describing a tool's install metadata
 DependencyManager     — Tool resolution, availability checks, guided installation
-BamBoozleApp          — Main application: menus, workflows, command execution
+ReconApp              — Main application: menus, workflows, command execution
 ```
 
 ### Execution Flow
 
 ```
-main() → BamBoozleApp.__init__() → BamBoozleApp.run()
+main() → ReconApp.__init__() → ReconApp.run()
   ├── display_banner()           — Clears screen, prints ASCII art (figlet)
   ├── DependencyManager.startup_check()  — Prints tool health report
   └── Main Loop                  — Dispatches menu selections
@@ -128,8 +130,6 @@ main() → BamBoozleApp.__init__() → BamBoozleApp.run()
 | `stormbreaker` | Payload/orchestration OSINT |
 | `holehe` | Email registration enumeration |
 | `osintgram` | Instagram intelligence |
-| `ghunt` | Google account intelligence (email/GAIA) |
-| `facebooktoolkit` | Facebook Graph API data extraction (friends, groups, profile data) |
 
 Install recipes are centralized in [Dependency Manager](#20-dependency-manager).
 
@@ -295,7 +295,7 @@ When Subfinder is unavailable, the app queries `https://crt.sh/?q=%.{domain}&out
 
 | Step | Method | Description |
 |------|--------|-------------|
-| 1 | `_http_preview(fetch_body=True)` | HTTPS/HTTP request with custom User-Agent (`BamBoozle/1.0`); extracts status, headers, and `<title>` tag |
+| 1 | `_http_preview(fetch_body=True)` | HTTPS/HTTP request with custom User-Agent (`Recon-Toolkit/1.0`); extracts status, headers, and `<title>` tag |
 | 2 | `_technology_fingerprint()` | Runs WhatWeb with `--log-json` for technology detection |
 
 ### URL Resolution
@@ -340,8 +340,6 @@ https://target → http://target
 | 3 | StormBreaker | `stormbreaker_workflow()` | Interactive or argument-based payload/orchestration |
 | 4 | Holehe | `holehe_lookup()` | Email service registration enumeration; multi-email support (comma/space separated) |
 | 5 | Osintgram | `osintgram_lookup()` | Instagram intelligence; single command or interactive shell mode |
-| 6 | GHunt | `ghunt_lookup()` | Google account intelligence via email/GAIA ID; modules: emails, documents, youtube, maps, photos, drive, gmail, calendar, contacts, calendar, playgames, plus |
-| 7 | Facebook Toolkit++ | `facebooktoolkit_workflow()` | Facebook Graph API data extraction (friends, groups, profile data, tokens) |
 
 ### SpiderFoot Target Types
 
@@ -379,8 +377,6 @@ https://target → http://target
 | 4 | Legal info | `_spiderfoot_individual_workflow("legal")` | SpiderFoot + WHOIS lookup |
 | 5 | Income info | `_spiderfoot_individual_workflow("income")` | SpiderFoot scan |
 | 6 | Career info | `_spiderfoot_individual_workflow("career")` | SpiderFoot + Osintgram `info` command |
-| 7 | Google account info | `ghunt_lookup()` | GHunt Google account intelligence |
-| 8 | Facebook account info | `facebooktoolkit_workflow()` | Facebook Toolkit++ Graph API extraction |
 
 ### Workflow Engine
 
@@ -392,37 +388,6 @@ https://target → http://target
 - **career**: Prompts for target, runs SpiderFoot + optional Osintgram `info` command
 
 All workflows output JSON to `reports/`.
-
-### 11.1 — GHunt Google Account Intelligence
-
-**Requires:** `ghunt` (auto-installable via dependency manager)
-
-GHunt performs OSINT on Google accounts using only an email address or Gaia ID. No API key required — uses Google's internal endpoints.
-
-**Prompts:**
-1. Email address or Gaia ID
-2. Module selection (or "all" for full enumeration)
-
-**Modules:**
-- `gmail` — Gmail profile info
-- `youtube` — YouTube channel data
-- `photos` — Google Photos albums
-- `maps` — Google Maps reviews/contributions
-- `drive` — Drive file metadata
-- `calendar` — Calendar visibility
-- `contacts` — Contact list visibility
-- `playgames` — Play Games profile
-- `plus` — Google+ (legacy) data
-- `people` — People API profile
-- `calendar` — Calendar sharing settings
-- `all` — Runs all available modules
-
-**Command generated:**
-```
-ghunt email "target@gmail.com" --module all
-```
-
-**Output:** `reports/{timestamp}_{email}_ghunt.txt` — JSON-structured results
 
 ---
 
@@ -446,7 +411,7 @@ ghunt email "target@gmail.com" --module all
 
 ### Install Behavior
 
-BamBoozle never installs silently. Option 9 checks tool status, asks which missing tool to install, then runs the centralized recipe documented in [Dependency Manager](#20-dependency-manager) only after the user confirms `Attempt automatic installation? [y/N]:`.
+Recon never installs silently. Option 9 checks tool status, asks which missing tool to install, then runs the centralized recipe documented in [Dependency Manager](#20-dependency-manager) only after the user confirms `Attempt automatic installation? [y/N]:`.
 
 ---
 
@@ -991,7 +956,7 @@ python ftp-cli/ftp_cli.py
 
 ### Fixed Tool Launch Patterns
 
-BamBoozle enforces predetermined launch patterns for all integrated tools. If an expected executable is missing from PATH, the workflow stops and shows install guidance. **No ad-hoc command strings are accepted at runtime** — this prevents injection of arbitrary commands through tool parameters.
+Recon enforces predetermined launch patterns for all integrated tools. If an expected executable is missing from PATH, the workflow stops and shows install guidance. **No ad-hoc command strings are accepted at runtime** — this prevents injection of arbitrary commands through tool parameters.
 
 ### Subprocess Safety
 
@@ -1025,7 +990,7 @@ This section is the single source of truth for tool install recipes. Other secti
 
 ### User-Confirmed Auto-Installation
 
-BamBoozle never installs silently. When a missing tool is selected, BamBoozle asks:
+Recon never installs silently. When a missing tool is selected, Recon asks:
 
 ```text
 Attempt automatic installation? [y/N]:
@@ -1033,7 +998,7 @@ Attempt automatic installation? [y/N]:
 
 If the user answers `y`, the dependency manager runs the configured install recipe for that tool.
 
-For package-manager tools, BamBoozle detects your OS and package manager, then runs the appropriate install command:
+For package-manager tools, Recon detects your OS and package manager, then runs the appropriate install command:
 
 | Package Manager | Detection | Install Command |
 |-----------------|-----------|-----------------|
@@ -1044,7 +1009,7 @@ For package-manager tools, BamBoozle detects your OS and package manager, then r
 | apk | `/sbin/apk` | `sudo apk add {package}` |
 | brew | `/usr/local/bin/brew` or `/opt/homebrew/bin/brew` | `brew install {package}` |
 
-GitHub-backed tools are stored under `~/.local/share/recon/tools`. Launchers are created in `~/.local/bin`, and BamBoozle checks that directory when resolving commands.
+GitHub-backed tools are stored under `~/.local/share/recon/tools`. Launchers are created in `~/.local/bin`, and Recon checks that directory when resolving commands.
 
 If auto-install fails, the app shows the failed command and the manual install hint.
 
@@ -1083,7 +1048,7 @@ For tools distributed as `.py` files (PhoneInfoga, SpiderFoot, StormBreaker), th
 python3 /path/to/script.py [args]
 ```
 
-For tools installed from GitHub by BamBoozle, wrappers are written to `~/.local/bin` and point back to the cloned checkout under `~/.local/share/recon/tools`.
+For tools installed from GitHub by Recon, wrappers are written to `~/.local/bin` and point back to the cloned checkout under `~/.local/share/recon/tools`.
 
 ---
 
@@ -1229,3 +1194,4 @@ Complete mapping of every report type:
 | Individual workflow | `{ts}_{target}_individual_{profile}.txt` |
 | Service control | `{ts}_{service}_{action}.txt` |
 | IW list | `{ts}_interfaces_iw_list.txt` |
+
