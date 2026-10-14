@@ -2,11 +2,15 @@
 """Advanced interactive OSINT and network reconnaissance helper."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import ipaddress
 import json
 import os
 import platform
 import re
+import secrets
+import secretstorage
 import shlex
 import shutil
 import socket
@@ -37,6 +41,7 @@ class ToolMetadata:
     optional: bool = False
     executables: Optional[List[str]] = None
     install_hint: Optional[str] = None
+    installer: Optional[str] = None
 
 
 class DependencyManager:
@@ -62,14 +67,65 @@ class DependencyManager:
             "subfinder": ToolMetadata(
                 "Subfinder", {"apt": "subfinder", "yum": "subfinder", "brew": "subfinder"}, optional=True
             ),
+            "besside-ng": ToolMetadata(
+                "Besside-ng",
+                {"apt": "aircrack-ng", "yum": "aircrack-ng", "brew": "aircrack-ng"},
+                optional=True,
+            ),
+            "airmon-ng": ToolMetadata(
+                "Airmon-ng",
+                {"apt": "aircrack-ng", "yum": "aircrack-ng", "brew": "aircrack-ng"},
+                optional=True,
+                executables=["airmon-ng"],
+            ),
+            "airodump-ng": ToolMetadata(
+                "Airodump-ng",
+                {"apt": "aircrack-ng", "yum": "aircrack-ng", "brew": "aircrack-ng"},
+                optional=True,
+                executables=["airodump-ng"],
+            ),
+            "aireplay-ng": ToolMetadata(
+                "Aireplay-ng",
+                {"apt": "aircrack-ng", "yum": "aircrack-ng", "brew": "aircrack-ng"},
+                optional=True,
+                executables=["aireplay-ng"],
+            ),
+            "wash": ToolMetadata(
+                "Wash",
+                {"apt": "reaver", "yum": "reaver", "brew": "reaver"},
+                optional=True,
+                executables=["wash"],
+            ),
+            "reaver": ToolMetadata(
+                "Reaver",
+                {"apt": "reaver", "yum": "reaver", "brew": "reaver"},
+                optional=True,
+                executables=["reaver"],
+            ),
+            "iw": ToolMetadata(
+                "iw",
+                {"apt": "iw", "yum": "iw", "brew": "iw"},
+                optional=True,
+                executables=["iw"],
+            ),
+            "hcxtools": ToolMetadata(
+                "HCXTools",
+                {"apt": "hcxtools", "yum": "hcxtools", "brew": "hcxtools"},
+                optional=True,
+                executables=["hcxpcapngtool", "hcxpcaptool"],
+            ),
+            "hashcat": ToolMetadata(
+                "Hashcat", {"apt": "hashcat", "yum": "hashcat", "brew": "hashcat"}, optional=True
+            ),
             "phoneinfoga": ToolMetadata(
                 friendly_name="PhoneInfoga",
                 packages={},
                 optional=True,
-                executables=["phoneinfoga"],
+                executables=["phoneinfoga", "phoneinfoga.py"],
+                installer="go",
                 install_hint=(
-                    "Install via pip (pip3 install phoneinfoga) or follow the instructions "
-                    "at https://github.com/sundowndev/PhoneInfoga."
+                    "Install with Go using: go install "
+                    "github.com/sundowndev/phoneinfoga/v2/cmd/phoneinfoga@latest"
                 ),
             ),
             "spiderfoot": ToolMetadata(
@@ -77,6 +133,7 @@ class DependencyManager:
                 packages={},
                 optional=True,
                 executables=["sfcli", "spiderfoot", "sfcli.py"],
+                installer="spiderfoot",
                 install_hint=(
                     "SpiderFoot does not have a native package in most distributions. Clone the "
                     "project from https://github.com/smicallef/spiderfoot and expose sfcli.py on "
@@ -88,6 +145,7 @@ class DependencyManager:
                 packages={},
                 optional=True,
                 executables=["stormbreaker", "storm-breaker", "stormbreaker.py"],
+                installer="stormbreaker",
                 install_hint=(
                     "StormBreaker typically runs from its Git repository. Clone "
                     "https://github.com/ultrasecurity/Storm-Breaker and expose the launcher "
@@ -99,6 +157,7 @@ class DependencyManager:
                 packages={},
                 optional=True,
                 executables=["holehe"],
+                installer="pip",
                 install_hint=(
                     "Install via pip (pip3 install holehe) or consult "
                     "https://github.com/megadose/holehe for manual setup steps."
@@ -109,13 +168,44 @@ class DependencyManager:
                 packages={},
                 optional=True,
                 executables=["osintgram"],
+                installer="osintgram",
                 install_hint=(
                     "Osintgram is normally executed from its repository. Clone "
                     "https://github.com/Datalux/Osintgram and run main.py with python3, or create "
                     "an 'osintgram' wrapper in your PATH."
                 ),
             ),
+            "ghunt": ToolMetadata(
+                friendly_name="GHunt",
+                packages={},
+                optional=True,
+                executables=["ghunt"],
+                installer="pip",
+                install_hint=(
+                    "Install via pip (pip3 install ghunt) or consult "
+                    "https://github.com/mxrch/GHunt for manual setup steps."
+                ),
+            ),
+            "facebooktoolkit": ToolMetadata(
+                friendly_name="Facebook Toolkit++",
+                packages={"apt": "php php-curl composer", "yum": "php php-curl composer", "brew": "php composer"},
+                optional=True,
+                executables=["php"],
+                installer="facebooktoolkit",
+                install_hint=(
+                    "Clone https://github.com/warifp/FacebookToolkit, run 'composer install' inside it, "
+                    "and ensure 'php run.php' works. Set FACEBOOK_TOOLKIT_PATH env var or place in "
+                    "~/.local/share/recon/tools/facebooktoolkit/"
+                ),
+            ),
+            "curl": ToolMetadata(
+                friendly_name="curl",
+                packages={"apt": "curl", "yum": "curl", "brew": "curl", "apk": "curl"},
+                optional=True,
+            ),
         }
+        self.managed_root = Path.home() / ".local" / "share" / "recon" / "tools"
+        self.managed_bin = Path.home() / ".local" / "bin"
 
     def tool_available(self, tool: str) -> bool:
         if tool in self.tools:
@@ -127,6 +217,10 @@ class DependencyManager:
         candidates = metadata.executables if metadata and metadata.executables else [tool]
         for candidate in candidates:
             path = shutil.which(candidate)
+            if not path:
+                managed_path = self.managed_bin / candidate
+                if managed_path.exists():
+                    path = str(managed_path)
             if not path:
                 continue
             if path.endswith(".py"):
@@ -149,13 +243,6 @@ class DependencyManager:
             message += " This feature is optional but recommended."
         print(message)
 
-        if not metadata.packages:
-            if metadata.install_hint:
-                print(metadata.install_hint)
-            else:
-                print("Automatic installation is not configured for this tool. Please install it manually.")
-            return False
-
         if not interactive:
             if metadata.install_hint:
                 print(metadata.install_hint)
@@ -166,7 +253,7 @@ class DependencyManager:
             print("Skipped automatic installation. Please install manually using your package manager.")
             return False
 
-        if not self._attempt_install(tool, metadata.packages):
+        if not self._attempt_install(tool, metadata):
             print("[ERROR] Unable to install automatically. Please install manually.")
             if metadata.install_hint:
                 print(metadata.install_hint)
@@ -181,7 +268,15 @@ class DependencyManager:
             print(metadata.install_hint)
         return False
 
-    def _attempt_install(self, tool: str, packages: Dict[str, str]) -> bool:
+    def _attempt_install(self, tool: str, metadata: ToolMetadata) -> bool:
+        if metadata.installer:
+            return self._attempt_custom_install(tool, metadata.installer)
+
+        packages = metadata.packages
+        if not packages:
+            print("[ERROR] No automatic install recipe is configured for this tool.")
+            return False
+
         system = platform.system()
         package_manager = None
         if system == "Linux":
@@ -232,6 +327,114 @@ class DependencyManager:
             return False
         return True
 
+    def _attempt_custom_install(self, tool: str, installer: str) -> bool:
+        if installer == "pip":
+            return self._run_install_command([sys.executable, "-m", "pip", "install", "--user", tool])
+        if installer == "go":
+            if not shutil.which("go"):
+                print("[ERROR] Go is required to install this tool automatically.")
+                return False
+            return self._run_install_command(
+                ["go", "install", "github.com/sundowndev/phoneinfoga/v2/cmd/phoneinfoga@latest"]
+            )
+        if installer == "spiderfoot":
+            repo_dir = self.managed_root / "spiderfoot"
+            if not self._clone_or_update_repo("https://github.com/smicallef/spiderfoot.git", repo_dir):
+                return False
+            requirements = repo_dir / "requirements.txt"
+            if requirements.exists() and not self._run_install_command(
+                [sys.executable, "-m", "pip", "install", "--user", "-r", str(requirements)]
+            ):
+                return False
+            return self._write_python_wrapper("sfcli.py", repo_dir / "sfcli.py")
+        if installer == "stormbreaker":
+            repo_dir = self.managed_root / "stormbreaker"
+            if not self._clone_or_update_repo("https://github.com/ultrasecurity/Storm-Breaker.git", repo_dir):
+                return False
+            requirements = repo_dir / "requirements.txt"
+            if requirements.exists() and not self._run_install_command(
+                [sys.executable, "-m", "pip", "install", "--user", "-r", str(requirements)]
+            ):
+                return False
+            for launcher in ("stormbreaker.py", "storm-breaker.py", "Storm-Breaker.py", "st.py", "main.py"):
+                if (repo_dir / launcher).exists():
+                    return self._write_python_wrapper("stormbreaker", repo_dir / launcher)
+            print("[ERROR] Could not find a StormBreaker launcher after cloning.")
+            return False
+        if installer == "osintgram":
+            repo_dir = self.managed_root / "osintgram"
+            if not self._clone_or_update_repo("https://github.com/Datalux/Osintgram.git", repo_dir):
+                return False
+            requirements = repo_dir / "requirements.txt"
+            if requirements.exists() and not self._run_install_command(
+                [sys.executable, "-m", "pip", "install", "--user", "-r", str(requirements)]
+            ):
+                return False
+            return self._write_python_wrapper("osintgram", repo_dir / "main.py")
+        if installer == "facebooktoolkit":
+            repo_dir = self.managed_root / "facebooktoolkit"
+            if not self._clone_or_update_repo("https://github.com/warifp/FacebookToolkit.git", repo_dir):
+                return False
+            composer = shutil.which("composer") or shutil.which("composer.phar")
+            if not composer:
+                print("[ERROR] Composer is required to install Facebook Toolkit dependencies.")
+                return False
+            if not self._run_install_command([composer, "install"], cwd=repo_dir):
+                return False
+            # Create wrapper script
+            self.managed_bin.mkdir(parents=True, exist_ok=True)
+            wrapper_path = self.managed_bin / "facebooktoolkit"
+            wrapper = f"""#!/bin/sh
+cd "{repo_dir}" && exec php run.php "$@"
+"""
+            try:
+                wrapper_path.write_text(wrapper)
+                wrapper_path.chmod(0o755)
+            except OSError as exc:
+                print(f"[ERROR] Could not create wrapper {wrapper_path}: {exc}")
+                return False
+            print(f"[INFO] Created launcher: {wrapper_path}")
+            return True
+        print(f"[ERROR] Unknown installer recipe: {installer}")
+        return False
+
+    def _clone_or_update_repo(self, url: str, repo_dir: Path) -> bool:
+        if not shutil.which("git"):
+            print("[ERROR] git is required to install this tool automatically.")
+            return False
+        self.managed_root.mkdir(parents=True, exist_ok=True)
+        if repo_dir.exists():
+            return self._run_install_command(["git", "-C", str(repo_dir), "pull", "--ff-only"])
+        return self._run_install_command(["git", "clone", "--depth", "1", url, str(repo_dir)])
+
+    def _write_python_wrapper(self, command_name: str, script_path: Path) -> bool:
+        if not script_path.exists():
+            print(f"[ERROR] Expected launcher was not found: {script_path}")
+            return False
+        self.managed_bin.mkdir(parents=True, exist_ok=True)
+        wrapper_path = self.managed_bin / command_name
+        wrapper = "#!/bin/sh\nexec python3 " + shlex.quote(str(script_path)) + ' "$@"\n'
+        try:
+            wrapper_path.write_text(wrapper)
+            wrapper_path.chmod(0o755)
+        except OSError as exc:
+            print(f"[ERROR] Could not create wrapper {wrapper_path}: {exc}")
+            return False
+        print(f"[INFO] Created launcher: {wrapper_path}")
+        return True
+
+    def _run_install_command(self, cmd: List[str]) -> bool:
+        print("[INFO] Running:", " ".join(shlex.quote(part) for part in cmd))
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as exc:
+            print(f"[ERROR] Installation command failed with exit code {exc.returncode}.")
+            return False
+        except FileNotFoundError:
+            print("[ERROR] Installation command not found.")
+            return False
+        return True
+
     def startup_check(self) -> None:
         print("\n[+] Checking key dependencies...\n")
         for tool in ("nmap", "tshark"):
@@ -255,22 +458,38 @@ def clear_screen() -> None:
 
 def display_banner() -> None:
     clear_screen()
-    print("========================================")
-    print("        RECON by C. Hirschauer")
-    print("========================================\n")
 
-    if shutil.which("figlet"):
-        try:
-            subprocess.run(["figlet", "-f", "slant", "RECON"], check=False)
-            print()
-        except Exception:
-            pass
+    banner = (
+        ",-----.                    ,-----.                       ,--.        \n"
+        "|  |) /_  ,--,--.,--,--,--.|  |) /_  ,---.  ,---. ,-----.|  | ,---.  \n"
+        "|  .-.  \\' ,-.  ||        ||  .-.  \\| .-. || .-. |`-.  / |  || .-. : \n"
+        "|  '--' /\\ '-'  ||  |  |  ||  '--' /' '-' '' '-' ' /  `-.|  |\\   --. \n"
+        "`------'  `--`--'`--`--`--'`------'  `---'  `---' `-----'`--' `----'"
+    )
+    print(banner)
+    print()
 
 
-class ReconApp:
+class BamBoozleApp:
     def __init__(self) -> None:
         self.dependency_manager = DependencyManager()
         self.ssl_context = ssl.create_default_context()
+
+    def _load_etherscan_key_from_kwallet(self) -> Optional[str]:
+        """Load ETHERSCAN_API_KEY from KWallet (service=gnoman, account=ETHERSCAN_API_KEY)."""
+        try:
+            conn = secretstorage.dbus_init()
+            collections = list(secretstorage.get_all_collections(conn))
+            for collection in collections:
+                if collection.is_locked():
+                    continue
+                for item in collection.get_all_items():
+                    attrs = item.get_attributes()
+                    if attrs.get("service") == "gnoman" and attrs.get("account") == "ETHERSCAN_API_KEY":
+                        return item.get_secret().decode()
+        except Exception:
+            pass
+        return None
 
     def run(self) -> None:
         display_banner()
@@ -286,8 +505,10 @@ class ReconApp:
                 "4": self.web_menu,
                 "5": self.packet_capture_menu,
                 "6": self.osint_menu,
-                "7": self.utility_menu,
-                "8": self.dependencies_menu,
+                "7": self.individuals_menu,
+                "8": self.utility_menu,
+                "9": self.dependencies_menu,
+                "10": self.wireless_menu,
                 "0": self.exit_app,
             }
             handler = handlers.get(choice)
@@ -303,7 +524,7 @@ class ReconApp:
 
     def print_main_menu(self) -> None:
         print("==============================")
-        print("  Advanced Reconnaissance Hub")
+        print("  BamBoozle")
         print("==============================")
         print("1) Smart target profile (IP/Domain intelligence)")
         print("2) Nmap scanning arsenal")
@@ -311,8 +532,10 @@ class ReconApp:
         print("4) Web footprinting toolkit")
         print("5) Packet capture & monitoring")
         print("6) OSINT automation & social recon")
-        print("7) Utility toolbox")
-        print("8) Dependency health & installation")
+        print("7) Individual intelligence workflows")
+        print("8) Utility toolbox")
+        print("9) Dependency health & installation")
+        print("10) Wireless capture & cracking")
         print("0) Exit")
         print("==============================")
 
@@ -359,6 +582,9 @@ class ReconApp:
         print("4) Aggressive scan with OS detection (-A)")
         print("5) Vulnerability scripts (--script vuln)")
         print("6) Custom command")
+        print("7) Host discovery / ping sweep (-sn)")
+        print("8) UDP scan (top 200 ports)")
+        print("9) Combined TCP+UDP service scan (top 100 ports)")
         print("0) Back to main menu")
         print("========================")
 
@@ -389,6 +615,12 @@ class ReconApp:
                 cmd = base_cmd + shlex.split(custom) + [target]
             else:
                 cmd = base_cmd + [target]
+        elif choice == "7":
+            cmd = base_cmd + ["-sn", target]
+        elif choice == "8":
+            cmd = base_cmd + ["-T4", "-Pn", "-sU", "--top-ports", "200", target]
+        elif choice == "9":
+            cmd = base_cmd + ["-T4", "-Pn", "-sS", "-sU", "--top-ports", "100", "-sV", target]
         else:
             print("[!] Invalid selection.\n")
             return
@@ -495,6 +727,734 @@ class ReconApp:
             print(line.rstrip())
 
     # ------------------------------------------------------------------
+    # Wireless capture & cracking
+    # ------------------------------------------------------------------
+    def wireless_menu(self) -> None:
+        while True:
+            print("\nWireless Capture & Cracking")
+            print("---------------------------")
+            print("  --- Interface Management ---")
+            print(" 1) List wireless interfaces (iw dev)")
+            print(" 2) Enable monitor mode (airmon-ng)")
+            print(" 3) Disable monitor mode (airmon-ng)")
+            print(" 4) Kill interfering processes (airmon-ng check kill)")
+            print("  --- Service Control ---")
+            print(" 5) NetworkManager  [start/stop/restart/status]")
+            print(" 6) wpa_supplicant  [start/stop/restart/status]")
+            print("  --- Scanning & Capture ---")
+            print(" 7)  Airodump-ng scan / capture")
+            print(" 8)  Besside-ng capture session")
+            print(" 9)  Wash WPS scan")
+            print("  --- Attacks ---")
+            print("10)  Aireplay-ng deauth test")
+            print("11)  Reaver WPS PIN attack")
+            print("  --- Cracking ---")
+            print("12) HCXTools convert capture to hashcat format")
+            print("13) Hashcat attack suite")
+            print(" 0) Back to main menu")
+            choice = input("Choose an option: ").strip()
+            if choice == "1":
+                self._wireless_list_interfaces()
+            elif choice == "2":
+                self._wireless_enable_monitor()
+            elif choice == "3":
+                self._wireless_disable_monitor()
+            elif choice == "4":
+                self._wireless_check_kill()
+            elif choice == "5":
+                self._service_control("NetworkManager")
+            elif choice == "6":
+                self._service_control("wpa_supplicant")
+            elif choice == "7":
+                self._airodump_capture()
+            elif choice == "8":
+                self.besside_capture()
+            elif choice == "9":
+                self._wash_scan()
+            elif choice == "10":
+                self._aireplay_deauth()
+            elif choice == "11":
+                self._reaver_wps()
+            elif choice == "12":
+                self.hcxtools_convert()
+            elif choice == "13":
+                self.hashcat_menu()
+            elif choice == "0":
+                print()
+                return
+            else:
+                print("[!] Invalid selection.\n")
+
+    def _wireless_enable_monitor(self) -> None:
+        base_cmd = self._get_tool_command("airmon-ng")
+        if not base_cmd:
+            return
+        interface = input("Wireless interface to enable monitor mode on: ").strip()
+        if not interface:
+            print("[!] Interface is required.\n")
+            return
+        kill_procs = input("Kill interfering processes first? [Y/n]: ").strip().lower()
+        if kill_procs != "n":
+            print("[INFO] Killing interfering processes...")
+            kill_cmd = ["sudo"] + list(base_cmd) + ["check", "kill"]
+            self._run_command_capture(kill_cmd)
+        cmd = ["sudo"] + list(base_cmd) + ["start", interface]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("airmon_start", interface)
+        report_path.write_text(output)
+        print(f"[+] Monitor mode enabled on {interface}")
+        print(f"[+] Log saved to {report_path}\n")
+
+    def _wireless_disable_monitor(self) -> None:
+        base_cmd = self._get_tool_command("airmon-ng")
+        if not base_cmd:
+            return
+        interface = input("Wireless interface to disable monitor mode on: ").strip()
+        if not interface:
+            print("[!] Interface is required.\n")
+            return
+        cmd = ["sudo"] + list(base_cmd) + ["stop", interface]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("airmon_stop", interface)
+        report_path.write_text(output)
+        print(f"[+] Monitor mode disabled on {interface}")
+        print(f"[+] Log saved to {report_path}\n")
+        restart_nm = input("Restart NetworkManager? [Y/n]: ").strip().lower()
+        if restart_nm != "n":
+            self._service_control("NetworkManager", action="restart")
+
+    def _wireless_check_kill(self) -> None:
+        base_cmd = self._get_tool_command("airmon-ng")
+        if not base_cmd:
+            return
+        cmd = ["sudo"] + list(base_cmd) + ["check", "kill"]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("airmon_check_kill", "processes")
+        report_path.write_text(output)
+        print(f"[+] Interfering processes killed")
+        print(f"[+] Log saved to {report_path}\n")
+
+    def _service_control(self, service: str, action: Optional[str] = None) -> None:
+        if action is None:
+            print(f"\n{service} Service Control")
+            print("-" * (len(service) + 16))
+            print("1) Status")
+            print("2) Start")
+            print("3) Stop")
+            print("4) Restart")
+            print("0) Cancel")
+            choice = input("Choose an action: ").strip()
+            action_map = {"1": "status", "2": "start", "3": "stop", "4": "restart"}
+            action = action_map.get(choice)
+            if not action:
+                return
+        systemctl = shutil.which("systemctl")
+        if systemctl:
+            cmd = ["sudo", systemctl, action, service]
+        else:
+            cmd = ["sudo", "service", service, action]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path(service, action)
+        report_path.write_text(output)
+        print(f"[+] {service} {action} completed")
+        print(f"[+] Log saved to {report_path}\n")
+
+    def _wireless_list_interfaces(self) -> None:
+        iw_cmd = shutil.which("iw")
+        if not iw_cmd:
+            print("[!] iw not found. Install with: apt install iw\n")
+            return
+        cmd = [iw_cmd, "dev"]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("iw_list", "interfaces")
+        report_path.write_text(output)
+        print(f"[+] Interface list saved to {report_path}\n")
+
+    def _airodump_capture(self) -> None:
+        base_cmd = self._get_tool_command("airodump-ng")
+        if not base_cmd:
+            return
+        interface = input("Monitor mode interface: ").strip()
+        if not interface:
+            print("[!] Interface is required.\n")
+            return
+        print("Capture modes:")
+        print("  1) Scan all channels (discovery)")
+        print("  2) Target specific BSSID")
+        print("  3) Target specific channel")
+        mode = input("Choose mode [1]: ").strip() or "1"
+        cmd = list(base_cmd) + [interface]
+        bssid = ""
+        channel = ""
+        if mode == "2":
+            bssid = input("Target BSSID: ").strip()
+            if bssid:
+                cmd += ["--bssid", bssid]
+            channel = input("Channel (recommended for targeted capture): ").strip()
+            if channel:
+                cmd += ["-c", channel]
+        elif mode == "3":
+            channel = input("Channel: ").strip()
+            if channel:
+                cmd += ["-c", channel]
+        write_capture = input("Write capture files to disk? [Y/n]: ").strip().lower()
+        if write_capture != "n":
+            output_path = self._create_report_path("airodump", interface, extension="cap")
+            prefix = str(output_path.with_suffix(""))
+            cmd += ["-w", prefix]
+        extra_args = input("Additional airodump-ng flags (optional): ").strip()
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        print("[INFO] Launching airodump-ng. Press Ctrl+C to stop.\n")
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("airodump_session", interface)
+        report_path.write_text(output or "[!] No output captured from airodump-ng.")
+        print(f"[+] Airodump-ng output saved to {report_path}\n")
+
+    def _wash_scan(self) -> None:
+        base_cmd = self._get_tool_command("wash")
+        if not base_cmd:
+            return
+        interface = input("Monitor mode interface: ").strip()
+        if not interface:
+            print("[!] Interface is required.\n")
+            return
+        cmd = list(base_cmd) + ["-i", interface]
+        scan_iface = input("Scan specific interface only? [Y/n]: ").strip().lower()
+        if scan_iface == "n":
+            cmd.append("-f")
+        extra_args = input("Additional wash flags (optional): ").strip()
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        print("[INFO] Scanning for WPS-enabled networks...\n")
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("wash_scan", interface)
+        report_path.write_text(output)
+        print(f"[+] Wash scan results saved to {report_path}\n")
+
+    def _aireplay_deauth(self) -> None:
+        base_cmd = self._get_tool_command("aireplay-ng")
+        if not base_cmd:
+            return
+        interface = input("Monitor mode interface: ").strip()
+        if not interface:
+            print("[!] Interface is required.\n")
+            return
+        print("Deauth modes:")
+        print("  1) Deauth specific client (-c)")
+        print("  2) Deauth all clients from AP (-a)")
+        print("  3) Broadcast deauth (-a broadcast)")
+        mode = input("Choose mode [2]: ").strip() or "2"
+        bssid = input("Target AP BSSID: ").strip()
+        if not bssid:
+            print("[!] BSSID is required.\n")
+            return
+        cmd = list(base_cmd) + ["--deauth", "5", "-a", bssid, interface]
+        if mode == "1":
+            client = input("Target client MAC: ").strip()
+            if client:
+                cmd = list(base_cmd) + ["--deauth", "5", "-a", bssid, "-c", client, interface]
+        count = input("Number of deauth packets [5]: ").strip()
+        if count:
+            cmd[2] = count
+        extra_args = input("Additional aireplay-ng flags (optional): ").strip()
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        print("[INFO] Sending deauthentication packets. Press Ctrl+C to stop.\n")
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("aireplay_deauth", bssid)
+        report_path.write_text(output)
+        print(f"[+] Deauth log saved to {report_path}\n")
+
+    def _reaver_wps(self) -> None:
+        base_cmd = self._get_tool_command("reaver")
+        if not base_cmd:
+            return
+        interface = input("Monitor mode interface: ").strip()
+        if not interface:
+            print("[!] Interface is required.\n")
+            return
+        bssid = input("Target AP BSSID: ").strip()
+        if not bssid:
+            print("[!] BSSID is required.\n")
+            return
+        cmd = list(base_cmd) + ["-i", interface, "-b", bssid]
+        channel = input("Channel (optional, improves speed): ").strip()
+        if channel:
+            cmd += ["-c", channel]
+        pin_path = input("Path to known PINs file (optional): ").strip()
+        if pin_path:
+            cmd += ["-f", pin_path]
+        extra_args = input("Additional reaver flags (optional): ").strip()
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        print("[INFO] Launching Reaver WPS PIN attack. Press Ctrl+C to stop.\n")
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("reaver_wps", bssid)
+        report_path.write_text(output)
+        print(f"[+] Reaver output saved to {report_path}\n")
+
+    def besside_capture(self) -> None:
+        base_cmd = self._get_tool_command("besside-ng")
+        if not base_cmd:
+            return
+        interface = input("Wireless interface (monitor mode): ").strip()
+        if not interface:
+            print("[!] Interface is required.\n")
+            return
+        channel = input("Channel (optional): ").strip()
+        bssid = input("Target BSSID (optional): ").strip()
+        extra_args = input("Additional Besside-ng flags (optional): ").strip()
+        output_path = self._create_report_path("besside", interface, extension="cap")
+        output_prefix = str(output_path.with_suffix(""))
+        cmd = list(base_cmd) + ["-i", interface, "-w", output_prefix]
+        if channel:
+            cmd += ["-c", channel]
+        if bssid:
+            cmd += ["-b", bssid]
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        print(
+            "[INFO] Launching Besside-ng. Press Ctrl+C to stop when enough data has been captured.\n"
+        )
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("besside_session", interface)
+        report_path.write_text(output or "[!] No output captured from Besside-ng.")
+        print(f"[+] Besside-ng output saved to {report_path}\n")
+        print(f"[INFO] Capture artifacts saved with prefix {output_prefix}\n")
+
+    def hcxtools_convert(self) -> None:
+        converter_cmd = self._get_hcxtools_converter()
+        if not converter_cmd:
+            return
+        capture_path = input("Path to .pcap/.pcapng capture file: ").strip()
+        if not capture_path:
+            print("[!] Capture file is required.\n")
+            return
+        capture = Path(capture_path)
+        if not capture.exists():
+            print("[!] Capture file not found.\n")
+            return
+        extra_args = input("Additional HCXTools flags (optional): ").strip()
+        output_path = self._create_report_path("hcxtools", capture.stem, extension="hc22000")
+        cmd = list(converter_cmd) + ["-o", str(output_path), str(capture)]
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("hcxtools_convert", capture.stem)
+        report_path.write_text(output or "[!] No output captured from HCXTools.")
+        print(f"[+] HCXTools conversion log saved to {report_path}\n")
+        print(f"[+] Hashcat-ready capture saved to {output_path}\n")
+
+    def hashcat_menu(self) -> None:
+        while True:
+            print("\nHashcat Attack Suite")
+            print("--------------------")
+            print("  --- Attacks ---")
+            print(" 1) Dictionary attack (-a 0)")
+            print(" 2) Combinator attack (-a 1)")
+            print(" 3) Brute-force / Mask attack (-a 3)")
+            print(" 4) Hybrid Wordlist + Mask (-a 6)")
+            print(" 5) Hybrid Mask + Wordlist (-a 7)")
+            print(" 6) Association attack (-a 9)")
+            print(" 7) Rule-based dictionary attack (-a 0 -r)")
+            print("  --- Utilities ---")
+            print(" 8) Show cracked hashes (--show)")
+            print(" 9) Benchmark GPU performance (-b)")
+            print("10) Hash type lookup (--example-hashes)")
+            print("11) Identify hash type (hashid)")
+            print("12) Session restore (--restore)")
+            print("13) Custom hashcat command")
+            print("  --- HCXTools ---")
+            print("14) Convert capture to hashcat format (hcxpcapngtool)")
+            print(" 0) Back to wireless menu")
+            choice = input("Choose an option: ").strip()
+            if choice == "1":
+                self._hashcat_dictionary()
+            elif choice == "2":
+                self._hashcat_combinator()
+            elif choice == "3":
+                self._hashcat_mask()
+            elif choice == "4":
+                self._hashcat_hybrid_wordlist_mask()
+            elif choice == "5":
+                self._hashcat_hybrid_mask_wordlist()
+            elif choice == "6":
+                self._hashcat_association()
+            elif choice == "7":
+                self._hashcat_rule_based()
+            elif choice == "8":
+                self._hashcat_show()
+            elif choice == "9":
+                self._hashcat_benchmark()
+            elif choice == "10":
+                self._hashcat_example_hashes()
+            elif choice == "11":
+                self._hashcat_identify_hash()
+            elif choice == "12":
+                self._hashcat_restore()
+            elif choice == "13":
+                self._hashcat_custom()
+            elif choice == "14":
+                self.hcxtools_convert()
+            elif choice == "0":
+                print()
+                return
+            else:
+                print("[!] Invalid selection.\n")
+
+    def _hashcat_get_common(self) -> Optional[tuple]:
+        base_cmd = self._get_tool_command("hashcat")
+        if not base_cmd:
+            return None
+        hash_path = input("Path to hash file (e.g. .hc22000): ").strip()
+        if not hash_path:
+            print("[!] Hash file is required.\n")
+            return None
+        hash_file = Path(hash_path)
+        if not hash_file.exists():
+            print("[!] Hash file not found.\n")
+            return None
+        hash_mode = input("Hash mode (-m) [default 22000]: ").strip() or "22000"
+        return base_cmd, hash_file, hash_mode
+
+    def _hashcat_get_session_flags(self) -> List[str]:
+        session_name = input("Session name (optional): ").strip()
+        flags: List[str] = []
+        if session_name:
+            flags += ["--session", session_name]
+        return flags
+
+    def _hashcat_get_common_flags(self) -> List[str]:
+        force = input("Use --force? [y/N]: ").strip().lower()
+        flags: List[str] = []
+        if force == "y":
+            flags.append("--force")
+        workload = input("Workload profile (1=low, 2=default, 3=high, 4=nightmare) [optional]: ").strip()
+        if workload in {"1", "2", "3", "4"}:
+            flags += ["--workload-profile", workload]
+        return flags
+
+    def _hashcat_execute(self, cmd: List[str], hash_file: Path, label: str) -> None:
+        extra_args = input("Additional Hashcat flags (optional): ").strip()
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        output_path = self._create_report_path("hashcat", hash_file.stem)
+        cmd += ["--outfile", str(output_path)]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("hashcat_session", hash_file.stem)
+        report_path.write_text(output or "[!] No output captured from Hashcat.")
+        print(f"[+] Hashcat session log saved to {report_path}")
+        print(f"[+] Cracked hashes saved to {output_path}\n")
+
+    def _hashcat_dictionary(self) -> None:
+        common = self._hashcat_get_common()
+        if not common:
+            return
+        base_cmd, hash_file, hash_mode = common
+        wordlist = input("Wordlist path (e.g. /usr/share/wordlists/rockyou.txt): ").strip()
+        if not wordlist:
+            print("[!] Wordlist path is required for dictionary attack.\n")
+            return
+        cmd = list(base_cmd) + ["-a", "0", "-m", hash_mode, str(hash_file), wordlist]
+        cmd += self._hashcat_get_session_flags()
+        cmd += self._hashcat_get_common_flags()
+        self._hashcat_execute(cmd, hash_file, "dictionary")
+
+    def _hashcat_combinator(self) -> None:
+        common = self._hashcat_get_common()
+        if not common:
+            return
+        base_cmd, hash_file, hash_mode = common
+        wordlist1 = input("First wordlist path: ").strip()
+        if not wordlist1:
+            print("[!] First wordlist is required.\n")
+            return
+        wordlist2 = input("Second wordlist path: ").strip()
+        if not wordlist2:
+            print("[!] Second wordlist is required for combinator attack.\n")
+            return
+        cmd = list(base_cmd) + ["-a", "1", "-m", hash_mode, str(hash_file), wordlist1, wordlist2]
+        cmd += self._hashcat_get_session_flags()
+        cmd += self._hashcat_get_common_flags()
+        self._hashcat_execute(cmd, hash_file, "combinator")
+
+    def _hashcat_mask(self) -> None:
+        common = self._hashcat_get_common()
+        if not common:
+            return
+        base_cmd, hash_file, hash_mode = common
+        print("Mask placeholders: ?l=lowercase ?u=uppercase ?d=digit ?s=special ?a=all")
+        print("Example: ?d?d?d?d?d?d?d?d = 8-digit PIN")
+        mask = input("Mask string: ").strip()
+        if not mask:
+            print("[!] Mask is required for brute-force attack.\n")
+            return
+        cmd = list(base_cmd) + ["-a", "3", "-m", hash_mode, str(hash_file), mask]
+        increment = input("Use increment mode? [Y/n]: ").strip().lower()
+        if increment != "n":
+            cmd.append("--increment")
+            inc_min = input("Increment minimum length (optional): ").strip()
+            if inc_min:
+                cmd += ["--increment-min", inc_min]
+            inc_max = input("Increment maximum length (optional): ").strip()
+            if inc_max:
+                cmd += ["--increment-max", inc_max]
+        custom_charset = input("Custom charset? (e.g. -1 ?l?d for charset 1) [optional]: ").strip()
+        if custom_charset:
+            try:
+                cmd.extend(shlex.split(custom_charset))
+            except ValueError:
+                print("[!] Invalid charset syntax.\n")
+                return
+        cmd += self._hashcat_get_session_flags()
+        cmd += self._hashcat_get_common_flags()
+        self._hashcat_execute(cmd, hash_file, "mask")
+
+    def _hashcat_hybrid_wordlist_mask(self) -> None:
+        common = self._hashcat_get_common()
+        if not common:
+            return
+        base_cmd, hash_file, hash_mode = common
+        wordlist = input("Wordlist path: ").strip()
+        if not wordlist:
+            print("[!] Wordlist is required for hybrid attack.\n")
+            return
+        print("Mask placeholders: ?l=lowercase ?u=uppercase ?d=digit ?s=special ?a=all")
+        mask = input("Mask string (appended to wordlist entries): ").strip()
+        if not mask:
+            print("[!] Mask is required.\n")
+            return
+        cmd = list(base_cmd) + ["-a", "6", "-m", hash_mode, str(hash_file), wordlist, mask]
+        cmd += self._hashcat_get_session_flags()
+        cmd += self._hashcat_get_common_flags()
+        self._hashcat_execute(cmd, hash_file, "hybrid_wl_mask")
+
+    def _hashcat_hybrid_mask_wordlist(self) -> None:
+        common = self._hashcat_get_common()
+        if not common:
+            return
+        base_cmd, hash_file, hash_mode = common
+        print("Mask placeholders: ?l=lowercase ?u=uppercase ?d=digit ?s=special ?a=all")
+        mask = input("Mask string (prepended to wordlist entries): ").strip()
+        if not mask:
+            print("[!] Mask is required.\n")
+            return
+        wordlist = input("Wordlist path: ").strip()
+        if not wordlist:
+            print("[!] Wordlist is required for hybrid attack.\n")
+            return
+        cmd = list(base_cmd) + ["-a", "7", "-m", hash_mode, str(hash_file), mask, wordlist]
+        cmd += self._hashcat_get_session_flags()
+        cmd += self._hashcat_get_common_flags()
+        self._hashcat_execute(cmd, hash_file, "hybrid_mask_wl")
+
+    def _hashcat_association(self) -> None:
+        common = self._hashcat_get_common()
+        if not common:
+            return
+        base_cmd, hash_file, hash_mode = common
+        wordlist1 = input("First wordlist path: ").strip()
+        if not wordlist1:
+            print("[!] First wordlist is required.\n")
+            return
+        wordlist2 = input("Second wordlist path: ").strip()
+        if not wordlist2:
+            print("[!] Second wordlist is required for association attack.\n")
+            return
+        cmd = list(base_cmd) + ["-a", "9", "-m", hash_mode, str(hash_file), wordlist1, wordlist2]
+        cmd += self._hashcat_get_session_flags()
+        cmd += self._hashcat_get_common_flags()
+        self._hashcat_execute(cmd, hash_file, "association")
+
+    def _hashcat_rule_based(self) -> None:
+        common = self._hashcat_get_common()
+        if not common:
+            return
+        base_cmd, hash_file, hash_mode = common
+        wordlist = input("Wordlist path: ").strip()
+        if not wordlist:
+            print("[!] Wordlist is required for rule-based attack.\n")
+            return
+        print("Common rule files: rules/best64.rule, rules/dive.rule, rules/d3ad0ne.rule")
+        print("You can specify multiple rules with repeated -r flags.")
+        rules: List[str] = []
+        while True:
+            rule = input("Rules file path (empty to finish): ").strip()
+            if not rule:
+                break
+            rules.append(rule)
+        cmd = list(base_cmd) + ["-a", "0", "-m", hash_mode, str(hash_file), wordlist]
+        for r in rules:
+            cmd += ["-r", r]
+        cmd += self._hashcat_get_session_flags()
+        cmd += self._hashcat_get_common_flags()
+        self._hashcat_execute(cmd, hash_file, "rule_based")
+
+    def _hashcat_show(self) -> None:
+        common = self._hashcat_get_common()
+        if not common:
+            return
+        base_cmd, hash_file, hash_mode = common
+        output_path = self._create_report_path("hashcat_show", hash_file.stem)
+        cmd = list(base_cmd) + ["-m", hash_mode, str(hash_file), "--show", "--outfile", str(output_path)]
+        extra_args = input("Additional flags (optional): ").strip()
+        if extra_args:
+            try:
+                cmd.extend(shlex.split(extra_args))
+            except ValueError as exc:
+                print(f"[!] Unable to parse extra arguments: {exc}\n")
+                return
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        print(f"[+] Cracked hashes saved to {output_path}\n")
+
+    def _hashcat_benchmark(self) -> None:
+        base_cmd = self._get_tool_command("hashcat")
+        if not base_cmd:
+            return
+        hash_mode = input("Benchmark specific hash mode? (empty for all) [optional]: ").strip()
+        cmd = list(base_cmd) + ["-b"]
+        if hash_mode:
+            cmd += ["-m", hash_mode]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("hashcat_benchmark", "benchmark")
+        report_path.write_text(output)
+        print(f"[+] Benchmark results saved to {report_path}\n")
+
+    def _hashcat_example_hashes(self) -> None:
+        base_cmd = self._get_tool_command("hashcat")
+        if not base_cmd:
+            return
+        hash_mode = input("Hash mode (-m) to look up (empty for all): ").strip()
+        cmd = list(base_cmd) + ["--example-hashes"]
+        if hash_mode:
+            cmd += ["-m", hash_mode]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("hashcat_example_hashes", hash_mode or "all")
+        report_path.write_text(output)
+        print(f"[+] Example hashes saved to {report_path}\n")
+
+    def _hashcat_identify_hash(self) -> None:
+        hash_input = input("Enter hash string or path to hash file: ").strip()
+        if not hash_input:
+            print("[!] Hash input is required.\n")
+            return
+        hash_path = Path(hash_input)
+        if hash_path.exists():
+            hashcat_path = shutil.which("hashid") or shutil.which("name-that-hash")
+            if not hashcat_path:
+                print("[!] hashid or name-that-hash not found. Install with: pip3 install hashid")
+                return
+            cmd = [hashcat_path, "-f", str(hash_path)]
+        else:
+            hashcat_path = shutil.which("hashid") or shutil.which("name-that-hash")
+            if not hashcat_path:
+                print("[!] hashid or name-that-hash not found. Install with: pip3 install hashid")
+                return
+            cmd = [hashcat_path, hash_input]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("hash_identify", hash_input[:30])
+        report_path.write_text(output)
+        print(f"[+] Hash identification saved to {report_path}\n")
+
+    def _hashcat_restore(self) -> None:
+        base_cmd = self._get_tool_command("hashcat")
+        if not base_cmd:
+            return
+        session_name = input("Session name to restore: ").strip()
+        if not session_name:
+            print("[!] Session name is required.\n")
+            return
+        cmd = list(base_cmd) + ["--restore", "--session", session_name]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("hashcat_restore", session_name)
+        report_path.write_text(output)
+        print(f"[+] Session restore log saved to {report_path}\n")
+
+    def _hashcat_custom(self) -> None:
+        base_cmd = self._get_tool_command("hashcat")
+        if not base_cmd:
+            return
+        custom = input("Enter full hashcat command (after 'hashcat'): ").strip()
+        if not custom:
+            print("[!] No command provided.\n")
+            return
+        try:
+            args = shlex.split(custom)
+        except ValueError as exc:
+            print(f"[!] Unable to parse arguments: {exc}\n")
+            return
+        cmd = list(base_cmd) + args
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+        report_path = self._create_report_path("hashcat_custom", "custom")
+        report_path.write_text(output)
+        print(f"[+] Custom command log saved to {report_path}\n")
+
+    # ------------------------------------------------------------------
     # OSINT automation & specialty tooling
     # ------------------------------------------------------------------
     def osint_menu(self) -> None:
@@ -539,14 +1499,7 @@ class ReconApp:
         if fmt not in allowed_formats:
             print("[!] Unknown format supplied. Falling back to json.\n")
             fmt = "json"
-        extra_args = input("Additional PhoneInfoga flags (optional): ").strip()
         cmd = list(base_cmd) + ["scan", "-n", number, "-f", fmt]
-        if extra_args:
-            try:
-                cmd.extend(shlex.split(extra_args))
-            except ValueError as exc:
-                print(f"[!] Unable to parse extra arguments: {exc}\n")
-                return
         output = self._run_command_capture(cmd)
         if output is None:
             return
@@ -650,21 +1603,16 @@ class ReconApp:
         if not email_input:
             print("[!] No email addresses provided.\n")
             return
+
         emails = [item for item in re.split(r"[\s,]+", email_input) if item]
         if not emails:
             print("[!] No valid email addresses detected.\n")
-            return
-        extra_args = input("Additional Holehe flags (applied to all targets, optional): ").strip()
-        try:
-            extra_tokens = shlex.split(extra_args) if extra_args else []
-        except ValueError as exc:
-            print(f"[!] Unable to parse extra arguments: {exc}\n")
             return
         chunks: List[str] = []
         for email in emails:
             header = f"===== {email} ====="
             print(f"\n{header}")
-            cmd = list(base_cmd) + extra_tokens + [email]
+            cmd = list(base_cmd) + [email]
             output = self._run_command_capture(cmd)
             if output is None:
                 chunks.append(f"{header}\n[!] Holehe execution failed for this address.")
@@ -680,6 +1628,82 @@ class ReconApp:
         report_text = "\n\n".join(chunks) + "\n"
         report_path.write_text(report_text)
         print(f"\n[+] Holehe summary saved to {report_path}\n")
+
+    # ------------------------------------------------------------------
+    # Individual intelligence workflows
+    # ------------------------------------------------------------------
+    def individuals_menu(self) -> None:
+        while True:
+            print("\nIndividual Intelligence Workflows")
+            print("--------------------------------")
+            print("1) Gather phone info (PhoneInfoga)")
+            print("2) Gather email info (Holehe)")
+            print("3) Gather name info (SpiderFoot)")
+            print("4) Gather legal info (SpiderFoot + Whois)")
+            print("5) Gather income info (SpiderFoot)")
+            print("6) Gather career info (SpiderFoot + Osintgram)")
+            print("7) Gather Google account info (GHunt)")
+            print("0) Back to main menu")
+            choice = input("Choose an option: ").strip()
+            if choice == "1":
+                self.phoneinfoga_lookup()
+            elif choice == "2":
+                self.holehe_lookup()
+            elif choice == "3":
+                self._spiderfoot_individual_workflow("name")
+            elif choice == "4":
+                self._spiderfoot_individual_workflow("legal")
+            elif choice == "5":
+                self._spiderfoot_individual_workflow("income")
+            elif choice == "6":
+                self._spiderfoot_individual_workflow("career")
+            elif choice == "7":
+                self.ghunt_lookup()
+            elif choice == "0":
+                print()
+                return
+            else:
+                print("[!] Invalid selection.\n")
+
+    def _spiderfoot_individual_workflow(self, profile: str) -> None:
+        base_cmd = self._get_tool_command("spiderfoot")
+        if not base_cmd:
+            return
+        prompt_map = {
+            "name": "Full name or alias",
+            "legal": "Legal name, company name, or jurisdiction-specific identifier",
+            "income": "Name, employer handle, or wallet-linked alias",
+            "career": "Name or professional username",
+        }
+        target = input(f"{prompt_map.get(profile, 'Target')}: ").strip()
+        if not target:
+            print("[!] Target is required.\n")
+            return
+        output_format = "json"
+        cmd = list(base_cmd) + ["-s", target, "-t", "name", "-o", output_format]
+        output = self._run_command_capture(cmd)
+        if output is None:
+            return
+
+        lines = [f"Profile: {profile}", f"Target: {target}", "", output.rstrip() or "[!] No output returned."]
+
+        if profile == "legal" and self.dependency_manager.tool_available("whois"):
+            whois_output = self._run_command_capture(["whois", target])
+            if whois_output is not None:
+                lines.extend(["", "===== WHOIS =====", whois_output.rstrip() or "[!] No WHOIS output returned."])
+
+        if profile == "career":
+            osintgram_cmd = self.dependency_manager.command_prefix("osintgram")
+            if osintgram_cmd:
+                instagram_user = input("Instagram username (optional, press Enter to skip): ").strip()
+                if instagram_user:
+                    ig_output = self._run_command_capture(list(osintgram_cmd) + [instagram_user, "info"])
+                    if ig_output is not None:
+                        lines.extend(["", "===== OSINTGRAM INFO =====", ig_output.rstrip() or "[!] No Osintgram output returned."])
+
+        report_path = self._create_report_path(f"individual_{profile}", target)
+        report_path.write_text("\n".join(lines) + "\n")
+        print(f"[+] Individual {profile} report saved to {report_path}\n")
 
     def osintgram_lookup(self) -> None:
         base_cmd = self._get_tool_command("osintgram")
@@ -728,6 +1752,8 @@ class ReconApp:
             print("2) Validate domain name")
             print("3) Reverse DNS lookup")
             print("4) Resolve domain to IPs")
+            print("5) Show public IPv4 (forced IPv4 lookup)")
+            print("6) Wallet address lookup & encrypt")
             print("0) Back to main menu")
             choice = input("Choose an option: ").strip()
             if choice == "1":
@@ -742,11 +1768,311 @@ class ReconApp:
             elif choice == "4":
                 target = input("Domain: ").strip()
                 print(self._resolve_domain(target))
+            elif choice == "5":
+                print(self._public_ipv4_lookup())
+            elif choice == "6":
+                self.wallet_tool()
             elif choice == "0":
                 print()
                 break
             else:
                 print("[!] Invalid selection.\n")
+
+    # ------------------------------------------------------------------
+    # Wallet Address Lookup & Encryption
+    # ------------------------------------------------------------------
+    def wallet_tool(self) -> None:
+        """Cryptocurrency wallet address lookup and encryption tool."""
+        print("\nWallet Address Lookup & Encrypt")
+        print("--------------------------------")
+        print("Supported: Bitcoin (BTC), Ethereum (ETH), Litecoin (LTC),")
+        print("           Bitcoin Cash (BCH), Dogecoin (DOGE), Dash (DASH)")
+        print("           Tron (TRX), Ripple (XRP), Solana (SOL)")
+        print("           (add more via API endpoints)")
+        print()
+
+        address = input("Enter wallet address: ").strip()
+        if not address:
+            print("[!] No address provided.\n")
+            return
+
+        # Identify address type
+        addr_type = self._identify_wallet_address(address)
+        if not addr_type:
+            print("[!] Unrecognized address format. Supported formats:")
+            print("  BTC: 1..., 3..., bc1...")
+            print("  ETH: 0x...")
+            print("  LTC: L..., M..., ltc1...")
+            print("  BCH: bitcoincash:..., q..., p...")
+            print("  DOGE: D..., 9..., A...")
+            print("  DASH: X...")
+            print("  TRX: T...")
+            print("  XRP: r...")
+            print("  SOL: 32-44 base58 chars")
+            return
+
+        print(f"[+] Detected: {addr_type}")
+
+        # Lookup address info
+        print("[INFO] Querying blockchain explorer...")
+        info = self._lookup_wallet_address(address, addr_type)
+        if not info:
+            print("[!] No data returned from explorer.\n")
+            return
+
+        # Display results
+        print("\n[+] Address Information:")
+        for key, value in info.items():
+            print(f"  {key}: {value}")
+
+        # Encrypt the results
+        print("\n[+] Encrypting results...")
+        encrypted = self._encrypt_data(json.dumps(info, indent=2))
+        if encrypted:
+            # Save encrypted result
+            report_path = self._create_report_path("wallet", address, extension="enc")
+            report_path.write_text(encrypted)
+            print(f"[+] Encrypted data saved to: {report_path}")
+            print(f"[+] Decryption key (save this!): {encrypted.split(':')[0]}")
+        else:
+            print("[!] Encryption failed.")
+
+    def _identify_wallet_address(self, address: str) -> Optional[str]:
+        """Identify cryptocurrency type from address format."""
+        address = address.strip()
+
+        # Bitcoin: 1..., 3..., bc1...
+        if re.match(r'^(1|3)[a-km-zA-HJ-NP-Z1-9]{25,34}$', address):
+            return "Bitcoin (BTC)"
+        if re.match(r'^bc1[a-z0-9]{39,59}$', address, re.IGNORECASE):
+            return "Bitcoin (BTC) - Bech32"
+
+        # Ethereum: 0x...
+        if re.match(r'^0x[a-fA-F0-9]{40}$', address):
+            return "Ethereum (ETH)"
+
+        # Litecoin: L..., M..., ltc1...
+        if re.match(r'^[LM][a-km-zA-HJ-NP-Z1-9]{26,33}$', address):
+            return "Litecoin (LTC)"
+        if re.match(r'^ltc1[a-z0-9]{39,59}$', address, re.IGNORECASE):
+            return "Litecoin (LTC) - Bech32"
+
+        # Bitcoin Cash: bitcoincash:..., q..., p...
+        if re.match(r'^bitcoincash:[qp][a-z0-9]{41}$', address, re.IGNORECASE):
+            return "Bitcoin Cash (BCH)"
+        if re.match(r'^[qp][a-z0-9]{41}$', address):
+            return "Bitcoin Cash (BCH)"
+
+        # Dogecoin: D..., 9..., A...
+        if re.match(r'^D[5-9A-HJ-NP-U][a-km-zA-HJ-NP-Z1-9]{32}$', address):
+            return "Dogecoin (DOGE)"
+        if re.match(r'^[9A][a-km-zA-HJ-NP-Z1-9]{32,33}$', address):
+            return "Dogecoin (DOGE)"
+
+        # Dash: X...
+        if re.match(r'^X[1-9A-HJ-NP-Za-km-z]{33,34}$', address):
+            return "Dash (DASH)"
+
+        # Tron: T...
+        if re.match(r'^T[a-zA-Z0-9]{33}$', address):
+            return "Tron (TRX)"
+
+        # Ripple/XRP: r...
+        if re.match(r'^r[0-9a-zA-Z]{24,34}$', address):
+            return "Ripple (XRP)"
+
+        # Solana: 32-44 base58 chars
+        if re.match(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$', address):
+            return "Solana (SOL)"
+
+        return None
+
+    def _lookup_wallet_address(self, address: str, addr_type: str) -> Optional[Dict]:
+        """Query blockchain explorer API for address info."""
+        url = self._get_explorer_url(address, addr_type)
+        if not url:
+            return None
+
+        print(f"[INFO] Querying: {url}")
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "BamBoozle/1.0"})
+            with urllib.request.urlopen(request, timeout=30, context=self.ssl_context) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            print(f"[!] API request failed: {exc}")
+            return None
+
+        return self._parse_explorer_response(data, addr_type, address)
+
+    def _get_explorer_url(self, address: str, addr_type: str) -> Optional[str]:
+        """Get the appropriate blockchain explorer API URL."""
+        addr_lower = addr_type.lower()
+
+        if "bitcoin" in addr_lower and "cash" not in addr_lower:
+            return f"https://blockchain.info/rawaddr/{address}"
+        if "ethereum" in addr_lower:
+            # Using Etherscan API with key from KWallet
+            key = self._load_etherscan_key_from_kwallet()
+            if key:
+                return f"https://api.etherscan.io/api?module=account&action=balance&address={address}&tag=latest&apikey={key}"
+            return f"https://api.etherscan.io/api?module=account&action=balance&address={address}&tag=latest"
+        if "litecoin" in addr_lower:
+            return f"https://chainz.cryptoid.info/ltc/api.dws?q=getbalance&a={address}"
+        if "bitcoin cash" in addr_lower:
+            return f"https://rest.bitcoin.com/v2/address/details/{address}"
+        if "dogecoin" in addr_lower:
+            return f"https://dogechain.info/api/v1/address/balance/{address}"
+        if "dash" in addr_lower:
+            return f"https://insight.dash.org/insight-api/addr/{address}"
+        if "tron" in addr_lower:
+            return f"https://apilist.tronscan.org/api/account?address={address}"
+        if "ripple" in addr_lower or "xrp" in addr_lower:
+            return f"https://data.ripple.com/v2/accounts/{address}/balances"
+        if "solana" in addr_lower:
+            return f"https://api.mainnet-beta.solana.com/getAccountInfo?pubkey={address}"
+
+        return None
+
+    def _parse_explorer_response(self, data: Dict, addr_type: str, address: str = "") -> Dict:
+        """Parse API response into standardized format."""
+        result = {"address_type": addr_type}
+
+        addr_lower = addr_type.lower()
+
+        if "bitcoin" in addr_lower and "cash" not in addr_lower:
+            # blockchain.info format
+            result["balance_satoshi"] = data.get("final_balance", 0)
+            result["balance_btc"] = data.get("final_balance", 0) / 100000000
+            result["total_received_satoshi"] = data.get("total_received", 0)
+            result["total_sent_satoshi"] = data.get("total_sent", 0)
+            result["tx_count"] = data.get("n_tx", 0)
+            if "txs" in data and data["txs"]:
+                result["recent_txs"] = len(data["txs"])
+
+        elif "ethereum" in addr_lower:
+            # Etherscan format: {"status":"1","message":"OK","result":"123456789"}
+            # or {"status":"0","message":"NOTOK","result":"Error message"}
+            if data.get("status") == "1" and "result" in data:
+                try:
+                    balance_wei = int(data.get("result", "0"))
+                    result["balance_wei"] = balance_wei
+                    result["balance_eth"] = balance_wei / 1e18
+                except (ValueError, TypeError):
+                    pass
+            elif data.get("status") == "0":
+                result["error"] = data.get("message", "API error")
+
+        elif "litecoin" in addr_lower:
+            # chainz format
+            balance = data.get("balance", "0")
+            result["balance_ltc"] = float(balance) if balance else 0
+
+        elif "bitcoin cash" in addr_lower:
+            result["balance_satoshi"] = data.get("balance", 0)
+            result["balance_bch"] = data.get("balance", 0) / 100000000
+            result["total_received_satoshi"] = data.get("totalReceived", 0)
+            result["total_sent_satoshi"] = data.get("totalSent", 0)
+            result["tx_count"] = data.get("txCount", 0)
+
+        elif "dogecoin" in addr_lower:
+            result["balance_doge"] = data.get("balance", 0) / 1e8
+            result["received_doge"] = data.get("received", 0) / 1e8
+            result["sent_doge"] = data.get("sent", 0) / 1e8
+
+        elif "dash" in addr_lower:
+            result["balance_dash"] = data.get("balance", 0) / 1e8
+            result["total_received_dash"] = data.get("totalReceived", 0) / 1e8
+            result["total_sent_dash"] = data.get("totalSent", 0) / 1e8
+            result["tx_count"] = data.get("txApperances", 0)
+
+        elif "tron" in addr_lower:
+            result["balance_trx"] = data.get("balance", 0) / 1e6
+            result["total_tx"] = data.get("totalTransactionCount", 0)
+
+        elif "ripple" in addr_lower or "xrp" in addr_lower:
+            balances = data.get("balances", [])
+            if balances:
+                result["balance_xrp"] = float(balances[0].get("value", 0))
+
+        elif "solana" in addr_lower:
+            if "result" in data and data["result"]:
+                result["lamports"] = data["result"].get("value", {}).get("lamports", 0)
+                result["owner"] = data["result"].get("value", {}).get("owner", "")
+                result["executable"] = data["result"].get("value", {}).get("executable", False)
+
+        return result
+
+    def _encrypt_data(self, data: str) -> Optional[str]:
+        """Encrypt data using AES-256-CBC via openssl."""
+        # Generate a random 32-byte key and 16-byte IV
+        key = secrets.token_bytes(32)
+        iv = secrets.token_bytes(16)
+
+        # Use openssl for encryption (available on most systems)
+        openssl = shutil.which("openssl")
+        if not openssl:
+            print("[!] openssl not found. Install openssl for encryption.")
+            return None
+
+        try:
+            # Encrypt using AES-256-CBC (more widely supported than GCM)
+            cmd = [
+                openssl, "enc", "-aes-256-cbc",
+                "-K", key.hex(),
+                "-iv", iv.hex(),
+                ]
+            proc = subprocess.run(cmd, input=data.encode(), capture_output=True, check=False)
+            if proc.returncode != 0:
+                print(f"[!] Encryption failed: {proc.stderr.decode()}")
+                return None
+
+            ciphertext = proc.stdout
+
+            # Combine key:iv:ciphertext as base64
+            key_b64 = base64.b64encode(key).decode()
+            iv_b64 = base64.b64encode(iv).decode()
+            ct_b64 = base64.b64encode(ciphertext).decode()
+
+            return f"{key_b64}:{iv_b64}:{ct_b64}"
+
+        except Exception as exc:
+            print(f"[!] Encryption error: {exc}")
+            return None
+
+    def _decrypt_data(self, encrypted: str) -> Optional[str]:
+        """Decrypt data encrypted with _encrypt_data."""
+        try:
+            parts = encrypted.split(":")
+            if len(parts) != 3:
+                return None
+
+            key_b64, iv_b64, ct_b64 = parts
+            key = base64.b64decode(key_b64)
+            iv = base64.b64decode(iv_b64)
+            ciphertext = base64.b64decode(ct_b64)
+
+            openssl = shutil.which("openssl")
+            if not openssl:
+                return None
+
+            # Decrypt using openssl
+            cmd = [
+                openssl, "enc", "-d", "-aes-256-cbc",
+                "-K", key.hex(),
+                "-iv", iv.hex(),
+                "-in", "/dev/stdin",
+                "-out", "/dev/stdout"
+            ]
+
+            proc = subprocess.run(cmd, input=ciphertext, capture_output=True, check=False)
+            if proc.returncode != 0:
+                return None
+
+            return proc.stdout.decode()
+
+        except Exception:
+            pass
+        return None
 
     # ------------------------------------------------------------------
     # Dependency helper
@@ -776,17 +2102,22 @@ class ReconApp:
         metadata = self.dependency_manager.tools.get(tool)
         friendly = metadata.friendly_name if metadata else tool
         self.dependency_manager.ensure_tool(tool, interactive=False)
-        manual = input(
-            f"Provide the full command to execute {friendly} (blank to cancel): "
-        ).strip()
-        if not manual:
-            print("[!] Command entry cancelled.\n")
+        print(f"[!] {friendly} command was not detected on PATH.")
+        self.dependency_manager.ensure_tool(tool, interactive=False)
+        print("[!] BamBoozle no longer accepts ad-hoc command strings for tool execution.")
+        print("    Install the expected executable and rerun this workflow.\n")
+        return None
+
+    def _get_hcxtools_converter(self) -> Optional[List[str]]:
+        base_cmd = self._get_tool_command("hcxtools")
+        if not base_cmd:
             return None
-        try:
-            return shlex.split(manual)
-        except ValueError as exc:
-            print(f"[ERROR] Unable to parse command: {exc}\n")
-            return None
+        candidate = Path(base_cmd[-1]).name
+        fallback = Path(base_cmd[0]).name
+        if candidate in {"hcxpcapngtool", "hcxpcaptool"} or fallback in {"hcxpcapngtool", "hcxpcaptool"}:
+            return base_cmd
+        print("[!] HCXTools conversion requires hcxpcapngtool or hcxpcaptool in your PATH.\n")
+        return None
 
     def _format_command(self, cmd: List[str]) -> str:
         try:
@@ -830,6 +2161,24 @@ class ReconApp:
             ========================================
             """.strip("\n")
         )
+
+    def _public_ipv4_lookup(self) -> str:
+        if not self.dependency_manager.ensure_tool("curl"):
+            return "[!] curl is required to perform a forced IPv4 lookup. Install curl and try again."
+        cmd = ["curl", "-4", "ifconfig.me"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15, check=False)
+        except subprocess.TimeoutExpired:
+            return "[!] Timed out while querying ifconfig.me."
+        except Exception as exc:
+            return f"[!] Failed to query ifconfig.me: {exc}"
+        output = (result.stdout or "").strip()
+        if not output:
+            stderr = (result.stderr or "").strip()
+            if stderr:
+                return f"[!] curl error: {stderr}"
+            return "[!] No response received from ifconfig.me."
+        return f"[+] Public IPv4 (forced): {output}"
 
     def _basic_resolution(self, target: str) -> str:
         lines = ["\n[+] Resolution"]
@@ -911,7 +2260,7 @@ class ReconApp:
         last_error: Optional[Exception] = None
         for url in self._build_url_candidates(target):
             print(f"[INFO] Fetching {url}...")
-            request = urllib.request.Request(url, headers={"User-Agent": "Recon-Toolkit/1.0"})
+            request = urllib.request.Request(url, headers={"User-Agent": "BamBoozle/1.0"})
             try:
                 with urllib.request.urlopen(request, timeout=15, context=self.ssl_context) as response:
                     status = response.status
@@ -1220,7 +2569,7 @@ class ReconApp:
 
 
 def main() -> None:
-    app = ReconApp()
+    app = BamBoozleApp()
     try:
         app.run()
     except KeyboardInterrupt:
